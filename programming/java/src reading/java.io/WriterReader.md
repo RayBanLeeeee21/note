@@ -1,25 +1,3 @@
-接口:
-* java.lang.Readable: 
-    * int read(java.nio.CharBuffer cb) throws IOException;
-* Closable:
-    * void close() throws IOException;
-* Appenadble:
-    * Appendable append(CharSequence cs) throws IOException;
-    * Appendable append(CharSequence cs, int start, int end) throws IOException;
-    * Appendable append(char c) throws IOException;
-* Flushable:
-    * Flushable 接口方法
-* CharSequence:
-    * int length();
-    * char charAt(int index);
-    * CharSequence subSequence(int start, int end);
-    * String toString();
-    * IntStream chars();        // [未看]
-    * IntStream codePoints();   // [未看]
-    * **CharSequence未定义equals与hashCode, 不能用在set或者map的key**
-    * 只读
-
-
 Reader (抽象)
 * 接口: Readable, Closable
 * 功能:
