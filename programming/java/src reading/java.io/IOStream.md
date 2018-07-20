@@ -21,3 +21,35 @@ OutputStream (抽象)
     * 其它
         * Closeable接口方法
         * Flushable接口方法
+
+FilterInputStream
+* 继承: InputStream
+* 功能:
+    * 简单代理一个InputStream
+
+FilterOutputStream
+* 继承: OutputStream
+* 功能:
+    * 简单代理一个OnputStream
+
+
+DataInputStream
+* 继承: FilterInputStream
+* 接口: DataInput
+* 特点:
+    * 线程安全由子类实现
+* **问题**:
+    * readFully
+
+DataOutputStream
+* 继承: FilterOutputStream
+* 接口: DataOutput
+* 特点:
+    * 所有write方法都同步
+
+RandomAccessFile
+* 接口: InputStream, OutputStream, Closeable
+* 功能:
+    * seek
+    * getFilePointer
+    * length();
