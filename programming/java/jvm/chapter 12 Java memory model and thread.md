@@ -74,3 +74,62 @@ volatile特殊规则:
 * **非原子协定**: jvm规范不需要对long, double的**load, store, read, write**实现原子操作
     * 但一般都会实现
 
+
+
+## 12.4 线程实现
+
+概念:
+* ULT: 用户级线程. 线程调用由用户来完成
+* LWP: 轻量级进程. KLT提供的接口, 连接ULT与KLT
+* KLT: 内核级线程. 线程调度由操作系统来完成
+
+实现:
+1. 内核线程实现 (ULT:KLT = 1:1)
+    * 一个进程有多个LWP
+    * 优点: 
+        * 调度由操作系统完成
+        * 一个线程阻塞不会影响另一个线程
+    * 缺点: 
+        * 需要完成用户态和内核态的切换, 代价大
+        * 系统提供的KLT资源有限
+2. 用户线程实现 (ULT:KLT = n:1)
+    * 一个进程有一个LWP
+    * 优点: 不用用户态与内核态的切换, 代价小
+    * 缺点: 
+        * 程序自己实现线程管理(ULT创建, 调度, 同步, 销毁)
+        * 同一个LWP对应的其中一个ULT阻塞时, 整个进程会被阻塞
+3. 混合实现 (ULT:KLT = m:n)
+    * 一个进程有多个LWP
+    * 避免了一个ULT阻塞导致整个进程被阻塞
+
+线程调度方式:
+* 协同式线程调度: 切换对于线程可见, 在线程运行结束时切换
+    * 缺点: 程序开发者自己负责切换, 容易造成阻塞而无法切换
+* 抢占式线程调度: 切换对于线程不可见, 由系统进行切换
+    * 线程可以让步, 但不能自己抢
+    * 可以有优先级
+
+Java实现:
+* 线程实现: 未规定. Windows和Linux中为一对一
+* 线程调度: 抢占式线程调度
+
+Java线程状态
+* NEW: 
+    * 触发条件: new线程
+* RUNNABLE: 
+    * 触发条件: Thread.start()
+* WAITING: 在获得锁后发现无法得到资源, 通过wait()等待并**释放锁**, 由其它线程notify
+    * 触发条件:
+        * Object.wait()
+        * Thread.join()
+        * LockSupport.park()
+* TIME_WAITING: 
+    * 触发条件:
+        * Object.wait(long)
+        * Thread.join(long)
+        * Thread.sleep(long)        // **sleep不会释放锁**
+        * LockSupport.parkNano()
+        * LockSupport.parkUtil()
+* BLOCKED:
+    * 触发条件: 拿不到锁
+* TERMINATED

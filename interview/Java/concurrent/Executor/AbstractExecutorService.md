@@ -16,8 +16,8 @@ AbstractExecutorService
                 futures.add(f);
                 execute(f);
             }
-            // 阻塞等待每个结果完成, 或者发生中断(CancelledException和Execution异常都不管
-            // 这里get()方法的作用类似于join()
+
+            // 这里get()方法的作用类似于join(), 等待所有任务执行结束
             for (int i = 0, size = futures.size(); i < size; i++) {
                 Future<T> f = futures.get(i);
                 if (!f.isDone()) {
@@ -31,6 +31,7 @@ AbstractExecutorService
             done = true;
             return futures;
         } finally {
+            
             // 如果因为中断而未完成, 则把所有任务calcel()掉
             if (!done)
                 for (int i = 0, size = futures.size(); i < size; i++)
@@ -56,7 +57,7 @@ AbstractExecutorService
             final long deadline = System.nanoTime() + nanos;
             final int size = futures.size();
 
-            // 执行任务, 同时观察有没超时, 超时返回
+            // 一边execute()任务, 一边
             for (int i = 0; i < size; i++) {
                 execute((Runnable)futures.get(i));
                 nanos = deadline - System.nanoTime();

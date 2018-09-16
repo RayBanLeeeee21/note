@@ -12,7 +12,7 @@ Flushable:
     * void flush() throws IOException;
 
 
-java.lang.Appenadble:
+java.lang.Appendable:
 * 操作:
     * Appendable append(CharSequence cs) throws IOException;
     * Appendable append(CharSequence cs, int start, int end) throws IOException;

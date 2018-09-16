@@ -18,7 +18,7 @@ ExecutorCompletionService
 * QueueingFuture
     ```java
         /**
-        *  QueueingFuture会在运行结束后, 把task(Callable)加入外部类的队列
+        *  QueueingFuture会在运行结束后, 把运行完的task(Callable)加入外部类的队列
         */
         private class QueueingFuture extends FutureTask<Void> {
             QueueingFuture(RunnableFuture<V> task) {
