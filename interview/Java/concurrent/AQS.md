@@ -28,7 +28,7 @@ AQS
         for (;;) {
             Node t = tail;              
             if (t == null) {
-                // 没有tail结点时, 经加入一个占位结点                            
+                // 没有tail结点时, 先加入一个占位结点                            
                 if (compareAndSetHead(new Node()))
                     tail = head;
             } else {
@@ -73,7 +73,7 @@ AQS
                     interrupted = true;                         // 
             }
         } finally {
-            // 线程发生异常时, 只置位中断符号, 所以不会引发cancel
+            // 在acquire()中, 线程发生异常时, 只置位中断符号, 所以不会引发cancel
             if (failed)                            
                 cancelAcquire(node);
         }
@@ -165,7 +165,7 @@ AQS
         // 单次尝试
         if (tryRelease(arg)) {                      
             Node h = head;
-            // 判断结点是否有效(null: 尚未初始化, 比如新建AQS后直接release(), h.waitStatus = 0: 其它线程释放 )
+            // 判断结点是否有效(null: 尚未初始化, 比如新建AQS后直接release(), h.waitStatus = 0: 其它线程正在释放 )
             if (h != null && h.waitStatus != 0)     
                 unparkSuccessor(h);                 // 唤醒下一个
             return true;

@@ -14,7 +14,6 @@ ConcurrentHashMap
     * loadFactor: 0.75
 * 默认属性:
     * DEFAULT_CAPACITY = 16
-    * DEFAULT_CONCURRENCY_LEVEL = 1616
 * 相关属性计算
 * sizeCtl的含义:
     * 在表分配之前, 用来保存第一次分配表的大小
@@ -35,7 +34,7 @@ ConcurrentHashMap
             if ((sc = sizeCtl) < 0)
                 Thread.yield(); 
 
-            // 1.2. cas 抢 sizeCtl, 抢到设为-1
+            // 1.2. cas 抢 sizeCtl, 抢到设为-1; 抢到sizeCtl以后要再检查一次有没初始化
             else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
                 try {
                     if ((tab = table) == null || tab.length == 0) {
@@ -63,7 +62,7 @@ ConcurrentHashMap
         if (initialCapacity < 0)
             throw new IllegalArgumentException();
         
-        // sizeCtl和实际容量cap 为 RoundToPower( initialCapacity / (2/3) )
+        // sizeCtl和实际容量cap 为 RoundToPower2( initialCapacity / (2/3) )
         int cap = ((initialCapacity >= (MAXIMUM_CAPACITY >>> 1)) ?
                    MAXIMUM_CAPACITY :
                    tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
@@ -111,13 +110,13 @@ ConcurrentHashMap
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
 
-            // 2.2. 非CAS读快速检查桶表是否为空, 是则尝试CAS写入新结点, 失败则回到2重新尝试
+            // 2.2. 非CAS读快速检查桶数组是否为空, 是则尝试CAS写入新结点, 失败则回到2重新尝试
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
                 if (casTabAt(tab, i, null,
                              new Node<K,V>(hash, key, value, null)))
                     break;                   
             }
-            // 2.3. 表正在被迁移
+            // 2.3. 表正在被迁移, 去参与迁移
             else if ((fh = f.hash) == MOVED)
                 tab = helpTransfer(tab, f);
             
@@ -197,6 +196,8 @@ ConcurrentHashMap
             else if ((b = tabAt(tab, index)) != null && b.hash >= 0) {
                 synchronized (b) {
                     // 1.2.1 抢到还要再检查一次表头有没被更新
+                    // 只有删除才可能改变头结点, 删完不用更新
+                    // 如果删除完还有新线程加入结点, 那就由它来treeifyBin
                     if (tabAt(tab, index) == b) {
                         TreeNode<K,V> hd = null, tl = null;
                         // 1.2.1.1 复制链表, 新链表的结点为TreeNode
@@ -224,7 +225,7 @@ ConcurrentHashMap
         与putTreeVal的区别是, 不用检查key是否存在
     */
     TreeBin(TreeNode<K,V> b) {
-        // 1. hash 设为 TREEBIN
+        // 1. hash 设为 TREEBIN = -2
         super(TREEBIN, null, null, null);   
 
         this.first = b;
@@ -308,7 +309,7 @@ ConcurrentHashMap
                         (dir = compareComparables(kc, k, pk)) == 0) {
             
                 // 1.4.1 hash相等 && (compare(key1, key2)相等) && key不相等 
-                // 直接搜索结点(只搜索一次)
+                // 直接搜索结点, 看能不能找到对应的key(只搜索一次)
                 if (!searched) {
                     TreeNode<K,V> q, ch;
                     searched = true;
@@ -415,8 +416,10 @@ ConcurrentHashMap
                     if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
                         transfer(tab, nt);
                 }
-                // sc>0表示没有线程在占用表, 自己尝试争夺, 争夺成功则sizeCtl改成0x800A0000
-                // 前16位作为flag表示正在迁移, 后16位用来记录参与迁移的线程数
+
+                // 自己尝试发起迁移
+                //     sc前16位作为flag表示正在迁移, 后16位用来记录参与迁移的线程数
+                //     争夺成功则sizeCtl改成0x800A0000
                 else if (U.compareAndSwapInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
@@ -466,10 +469,10 @@ ConcurrentHashMap
         int sc;
         while ((sc = sizeCtl) >= 0) {
             Node<K,V>[] tab = table; int n;
-            // 表为空
+            // 如果桶数组为空, 初始化桶数组
             if (tab == null || (n = tab.length) == 0) {
                 n = (sc > c) ? sc : c;
-                // 争夺sizeCtl, 取得sizeCtl时可以初始化桶表
+                // 争夺sizeCtl, 取得sizeCtl时可以初始化桶数组
                 if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
                     try {
                         if (table == tab) {
@@ -487,13 +490,14 @@ ConcurrentHashMap
                 break;
             else if (tab == table) {
                 int rs = resizeStamp(n);
+                // 检查需不需要参与, 未完成迁移则要参与迁移
                 if (sc < 0) {
                     Node<K,V>[] nt;
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs // resize标志被撤, 迁移完成
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs // 1. resize标志被撤, 迁移完成
                         || sc == rs + 1 
                         || sc == rs + MAX_RESIZERS      
-                        || (nt = nextTable) == null       // nextTable被撤, 迁移完成
-                        || transferIndex <= 0)            // stripe已被分配完
+                        || (nt = nextTable) == null       // 2. nextTable被撤, 迁移完成
+                        || transferIndex <= 0)            // 3. stripe已被分配完
                         break;
                     if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
                         transfer(tab, nt);
@@ -571,8 +575,11 @@ ConcurrentHashMap
                 }
 
                 if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
-                    if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)       // resize标志已被撤
+                    // 判断自己是不是最后一个完成的
+                    if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)       
                         return;
+                    
+                    // 最后一个完成的需要负责用新表替换旧表
                     finishing = advance = true;                                 
                     i = n; // recheck before commit
                 }
@@ -590,7 +597,7 @@ ConcurrentHashMap
                     if (tabAt(tab, i) == f) {
                         Node<K,V> ln, hn;
 
-                        // 如果是链表头, 以1.7的方法复制链表, 并拆分, 最后赋给新桶表
+                        // 如果是链表头, 以1.7的方法复制链表, 并拆分, 最后赋给新桶数组
                         if (fh >= 0) {
                             int runBit = fh & n;
                             Node<K,V> lastRun = f;
