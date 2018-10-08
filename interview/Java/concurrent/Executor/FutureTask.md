@@ -28,12 +28,14 @@ Future接口
 * isDone(): 执行完成(非NEW)
 * V get() throws InterruptedException, ExecutionException: 
     * 阻塞等待结果, 直到等到结果, 中断或者其它异常
+    * 除了两个声明的受查异常以外, 还有CancellationException
+    * ExecutionException中包装异常原因
 * V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException;
     * 阻塞等待结果, 直到等到结果, 中断, 超时异常或者其它异常
 
 状态
-* 状态
-    * NEW: 创建未运行
+* 状态(带ING的都是**过渡状态**, 时间比较短)
+    * NEW: 创建未运行, 或者运行中 (两个子状态由runner是否为null来区分)
     * COMPLETING: 运行结束或者异常, 结果(异常)未保存到outcome
     * NORMAL: 结果保存到了outcome
     * EXCEPTIONAL: 异常保存到了outcome
@@ -66,10 +68,8 @@ FutureTask
 * run()
     ```java
 
-    
     public void run() {
-        // state不是NEW(COMPLETING, NORMAL, EXCEPTIONAL, INTERRUPTED, INTERRUPTING CANCELLED)
-        // 或者run()的机会被其它线程抢走
+        // 状态为NEW则竞争CAS(runner, null, currentThread()) (与其它run()竞争)
         if (state != NEW ||                                                     // [1]
             !UNSAFE.compareAndSwapObject(this, runnerOffset,                
                                          null, Thread.currentThread()))
@@ -96,7 +96,7 @@ FutureTask
             // 为阻止其它线程并发run(), 在运行结束之前runner都不能为空
             runner = null;
             
-            // 如果是被cancel()方法中断,  set()/setException()抢不到设置最终state和唤醒等待线程的机会, 则等待中断过程完成
+            // 未竞争过cancel()方法时, 让步直到CANCELLED(即cancel()完成)
             int s = state;
             if (s >= INTERRUPTING)
                 handlePossibleCancellationInterrupt(s);  // 循环yield()直到cancel()的线程完成cancel()
@@ -107,7 +107,7 @@ FutureTask
     
     
     protected void set(V v) {
-        // 如果在这之前cancel()方法发生过, 那state就不是NEW, 设置final state和唤醒等待线程的机会由cancel()的线程抢到
+        // 竞争 CAS(state, NEW, COMPLETING) (与cancel()竞争)
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = v;
             UNSAFE.putOrderedInt(this, stateOffset, NORMAL); 
@@ -116,7 +116,7 @@ FutureTask
     }
 
     protected void setException(Throwable t) {
-        // 如果在这之前cancel()方法发生过, 那state就不是NEW, 设置final state和唤醒等待线程的机会由cancel()的线程抢到
+        // 竞争 CAS(state, NEW, COMPLETING) (与cancel()竞争)
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = t;
             UNSAFE.putOrderedInt(this, stateOffset, EXCEPTIONAL); // final state
@@ -129,7 +129,7 @@ FutureTask
     */
     private void finishCompletion() {
         
-        // 并发finishCompletion时, 把waiters作为互斥量, 线程抢着把waiters从非null 改(cas)成null
+        // 循环竞争CAS(waiters, currentWaiter(即q), null) (与其它finishCompletion竞争)
         for (WaitNode q; (q = waiters) != null;) {
             if (UNSAFE.compareAndSwapObject(this, waitersOffset, q, null)) {
                 for (;;) {
@@ -198,15 +198,17 @@ FutureTask
         // 或者没有抢到cancel的机会, 返回false
         if (!(state == NEW &&
               UNSAFE.compareAndSwapInt(this, stateOffset, NEW,
-                  mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))  // 不用中断则只把状态设成CANCELLED
+                  mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))  // 不用中断run()则只把状态设成CANCELLED
             return false;
         // 
         try {    
+            // 需要中断run()则给run()的线程发出中断信号
+            // 此时当前线程已经抢到state, 不用竞争, run()只需要等待cancel()结束
             if (mayInterruptIfRunning) {
                 try {
                     Thread t = runner;
                     if (t != null)
-                        t.interrupt();      // 给run()的线程发出中断信号
+                        t.interrupt();      
                 } finally { 
                     // 把状态设置为interrupted (此时其它线程调用set()或者setException()都抢不到机会)
                     UNSAFE.putOrderedInt(this, stateOffset, INTERRUPTED); 
@@ -243,7 +245,7 @@ FutureTask
         WaitNode q = null;
         boolean queued = false;
 
-        // 循环
+        // 循环(检查中断, 状态, 入队, 超时, 都未发生则阻塞)
         for (;;) {
             // 首先检查中断, 刚运行就检查到中断或者LockSupport.park中发生中断, 跳转到此
             // 先把中断标志清除, 然后把自己线程从等待队列中清理掉, 最后抛中断异常
@@ -259,7 +261,7 @@ FutureTask
                     q.thread = null;
                 return s;
             }
-            // 快完成了, 循环yield()直到NORMAL或者EXCEPTIONAL
+            // 如果接近完成, 则让步等待
             else if (s == COMPLETING) 
                 Thread.yield();
             // 1. 把当前线程保存到WaitNode

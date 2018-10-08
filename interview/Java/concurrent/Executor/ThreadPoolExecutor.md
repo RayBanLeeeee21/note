@@ -1,6 +1,12 @@
 
 # 相关类
 Executors.DefaultThreadFactory
+* ThreadFactory的意义
+    * 统一设置thread的属性
+        * thread name
+        * priority
+        * isDaemon
+        * thread group
 ```java
 static class DefaultThreadFactory implements ThreadFactory {
         private static final AtomicInteger poolNumber = new AtomicInteger(1);
@@ -53,6 +59,8 @@ private final class Worker
     Worker(Runnable firstTask) {
         setState(-1);                   // [1]
         this.firstTask = firstTask;
+
+        //  ThreadFactory会把给定的task放在Thread里面
         this.thread = getThreadFactory().newThread(this);
     }
     // [1] state被初始化为-1, 此时不可被中断, 经过一次unlock()后再改成0, 可被中断
@@ -62,7 +70,7 @@ private final class Worker
         runWorker(this);
     }
 
-    // 锁方法 (不可重入, 排他)
+    // 锁方法 (不可重入排他锁)
     // 1表示上锁, 0表示未上锁
     protected boolean isHeldExclusively() {
         return getState() != 0;
@@ -135,11 +143,11 @@ private final class Worker
     * private volatile int corePoolSize
     * private volatile int maximumPoolSize
 * 状态: 
-    * 0xe0.. RUNNING: 接受新任务
-    * 0x00.. SHUTDOWN: 关闭, 不接受新任务, 但继续执行队列的任务
-    * 0x20.. STOP: 停止, 不接受新任务, 中断所有任务
-    * 0x40.. TIDYING: 队列为空或者所有task被终止, 线程池为空, 执行terminated()方法
-    * 0x40.. TERMINATED: terminated()方法执行结束
+    * 0xe (1110).. RUNNING: 接受新任务
+    * 0x0 (0000).. SHUTDOWN: 关闭, 不接受新任务, 但继续执行队列的任务
+    * 0x2 (0010).. STOP: 停止, 不接受新任务, 中断所有任务
+    * 0x4 (0100).. TIDYING: 队列为空或者所有task被终止, 线程池为空, 执行terminated()方法
+    * 0x6 (0110).. TERMINATED: terminated()方法执行结束
 * 状态转移
     * RUNNING -> SHUTDOWN: 执行shutdown();
     * (RUNNING or SHUTDOWN) -> STOP: shutdownNow()
@@ -170,7 +178,7 @@ private final class Worker
             //      RUNNING中, 尝试将command加入workQueue
             if (isRunning(c) && workQueue.offer(command)) {
 
-                // 重检查, 防止刚好被shutdown或者stop
+                // 重检查运行状态, 防止刚好被shutdown或者stop
                 int recheck = ctl.get();
                 if (! isRunning(recheck) && remove(command))
                     reject(command);
@@ -643,7 +651,7 @@ RejectedExecutionHandler实现
     ```
 * ThreadPoolExecutor.DiscardPolicy: 果断把执行不了的task丢弃掉, 不通知调用者
     * rejectedExecution方法为空 
-* ThreadPoolExecutor.DiscardOPolicy: 如果executor还在RUNNING状态, 那把最老的一个task丢掉, 然后尝试加入新的
+* ThreadPoolExecutor.DiscardOldestPolicy: 如果executor还在RUNNING状态, 那把最老的一个task丢掉, 然后尝试加入新的
     ```java
     public void rejectedExecution(Runnable r, ThreadPoolExecutor e) {
         if (!e.isShutdown()) {
