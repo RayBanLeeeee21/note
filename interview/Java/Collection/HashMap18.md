@@ -1,3 +1,7 @@
+HashMap17与18差别
+* 17将新结点加在链表头, 18加在链表尾
+* 17先检查扩容再加入新结点, 18先加入新结点再扩容
+
 HashMap
 * 特点:
     * key/value都可以是null
@@ -8,8 +12,244 @@ HashMap
 * hash算法
     * (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
     * 将高位传播到低位
-* 红黑树特性:
-    * 在经过多次旋转以后
+* 构造器
+    ```java
+    public HashMap(int initialCapacity, float loadFactor) {
+        if (initialCapacity < 0)
+            throw new IllegalArgumentException("Illegal initial capacity: " +
+                                               initialCapacity);
+
+        // 最大容量不超过1<<30
+        if (initialCapacity > MAXIMUM_CAPACITY)
+            initialCapacity = MAXIMUM_CAPACITY;
+        if (loadFactor <= 0 || Float.isNaN(loadFactor))
+            throw new IllegalArgumentException("Illegal load factor: " +
+                                               loadFactor);
+        this.loadFactor = loadFactor;
+
+        // 此时threshold的语义不是阈值, 只是暂时保存初始化容量
+        this.threshold = tableSizeFor(initialCapacity);
+    }
+    ```
+* put
+    ```JAVA
+    final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
+                   boolean evict) {
+        Node<K,V>[] tab; Node<K,V> p; int n, i;
+
+        // 检查表的初始化
+        if ((tab = table) == null || (n = tab.length) == 0)
+            n = (tab = resize()).length;
+
+        // 计算hash, 如果桶中为空, 那就直接新建
+        if ((p = tab[i = (n - 1) & hash]) == null)
+            tab[i] = newNode(hash, key, value, null);
+        else {
+            Node<K,V> e; K k;
+            // 先判断是不是桶中第一个结点
+            // (这个快速判断有利于多次连续put同一个key的场景)
+            if (p.hash == hash &&
+                ((k = p.key) == key || (key != null && key.equals(k))))
+                e = p;
+            // 如果是红黑树, 按红黑树的方法加入节点
+            else if (p instanceof TreeNode)
+                e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
+            else {
+                // 在链表中查找, 直到找到key或者确认没找到
+                for (int binCount = 0; ; ++binCount) {
+                    if ((e = p.next) == null) {
+                        // 找不到则加入新结点
+                        p.next = newNode(hash, key, value, null);
+                        //检查要不要treeify
+                        if (binCount >= TREEIFY_THRESHOLD - 1) // -1 for 1st
+                            treeifyBin(tab, hash);
+                        break;
+                    }
+                    // 找到
+                    if (e.hash == hash &&
+                        ((k = e.key) == key || (key != null && key.equals(k))))
+                        break;
+                    p = e;
+                }
+            }
+            // e!=null 说明找到了, 更新值并返回旧值
+            if (e != null) { // existing mapping for key
+                V oldValue = e.value;
+                if (!onlyIfAbsent || oldValue == null)
+                    e.value = value;
+                afterNodeAccess(e);
+                return oldValue;
+            }
+        }
+        // 更新修改次数
+        ++modCount;
+        // 如果超过阈值, 要进行resize()
+        if (++size > threshold)
+            resize();
+        afterNodeInsertion(evict);
+        return null;
+    }
+    ```
+* 重hash方法
+    ```java
+    final Node<K,V>[] resize() {
+        Node<K,V>[] oldTab = table;
+        int oldCap = (oldTab == null) ? 0 : oldTab.length;
+        int oldThr = threshold;
+        int newCap, newThr = 0;
+        if (oldCap > 0) {
+            if (oldCap >= MAXIMUM_CAPACITY) {
+                threshold = Integer.MAX_VALUE;
+                return oldTab;
+            }
+            else if ((newCap = oldCap << 1) < MAXIMUM_CAPACITY &&
+                     oldCap >= DEFAULT_INITIAL_CAPACITY)
+                newThr = oldThr << 1; // double threshold
+        }
+        else if (oldThr > 0) // initial capacity was placed in threshold
+            newCap = oldThr;
+        else {               // zero initial threshold signifies using defaults
+            newCap = DEFAULT_INITIAL_CAPACITY;
+            newThr = (int)(DEFAULT_LOAD_FACTOR * DEFAULT_INITIAL_CAPACITY);
+        }
+        if (newThr == 0) {
+            float ft = (float)newCap * loadFactor;
+            newThr = (newCap < MAXIMUM_CAPACITY && ft < (float)MAXIMUM_CAPACITY ?
+                      (int)ft : Integer.MAX_VALUE);
+        }
+        threshold = newThr;
+        @SuppressWarnings({"rawtypes","unchecked"})
+            Node<K,V>[] newTab = (Node<K,V>[])new Node[newCap];
+        table = newTab;
+        if (oldTab != null) {
+            for (int j = 0; j < oldCap; ++j) {
+                Node<K,V> e;
+                if ((e = oldTab[j]) != null) {
+                    oldTab[j] = null;
+                    if (e.next == null)
+                        newTab[e.hash & (newCap - 1)] = e;
+
+                    // 如果是TreeNode, 则按TreeNode的方法进行拆分
+                    else if (e instanceof TreeNode)
+                        ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
+
+                    // 把index不同的结点拆分到不同的链表中
+                    else { // preserve order
+                        Node<K,V> loHead = null, loTail = null;
+                        Node<K,V> hiHead = null, hiTail = null;
+                        Node<K,V> next;
+                        do {
+                            next = e.next;
+                            if ((e.hash & oldCap) == 0) {
+                                if (loTail == null)
+                                    loHead = e;
+                                else
+                                    loTail.next = e;
+                                loTail = e;
+                            }
+                            else {
+                                if (hiTail == null)
+                                    hiHead = e;
+                                else
+                                    hiTail.next = e;
+                                hiTail = e;
+                            }
+                        } while ((e = next) != null);
+                        // 把子链表放到新表的对应位置
+                        if (loTail != null) {
+                            loTail.next = null;
+                            newTab[j] = loHead;
+                        }
+                        if (hiTail != null) {
+                            hiTail.next = null;
+                            newTab[j + oldCap] = hiHead;
+                        }
+                    }
+                }
+            }
+        }
+        return newTab;
+    }
+    ```
+* treeifyBin方法
+    ```java
+    final void treeifyBin(Node<K,V>[] tab, int hash) {
+        int n, index; Node<K,V> e;
+
+        // 容量小于MIN_TREEIFY_CAPACITY = 64时, 只做resize()
+        if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY)
+            resize();
+
+        
+        else if ((e = tab[index = (n - 1) & hash]) != null) {
+            TreeNode<K,V> hd = null, tl = null;                    // hd保存头结点, tl保存上一次处理的结点
+            // 复制链表, 
+            // 新链表的Node为TreeNode
+            // TreeNode是双链表结点 (便于遍历, 以及后面复原成链表)
+            do {
+                TreeNode<K,V> p = replacementTreeNode(e, null);
+                if (tl == null)
+                    hd = p;
+                else {
+                    p.prev = tl;
+                    tl.next = p;
+                }
+                tl = p;
+            } while ((e = e.next) != null);
+            // 按红黑树的规则依次把每个结点加入红黑树并且重新平衡
+            if ((tab[index] = hd) != null)
+                hd.treeify(tab);
+        }
+    }
+
+    /** 
+        把链表的每个结点放到红黑树中, 并平衡, 最后把根结点放到桶表头
+    */
+    final void treeify(Node<K,V>[] tab) {
+        TreeNode<K,V> root = null;
+        // 依次把每个结点加入到红黑树中, 并重新平衡
+        for (TreeNode<K,V> x = this, next; x != null; x = next) {
+            next = (TreeNode<K,V>)x.next;
+            x.left = x.right = null;
+            if (root == null) {
+                x.parent = null;
+                x.red = false;
+                root = x;
+            }
+            else {
+                K k = x.key;
+                int h = x.hash;
+                Class<?> kc = null;
+                // 寻找插入结点的位置, 插入结点
+                for (TreeNode<K,V> p = root;;) {
+                    int dir, ph;
+                    K pk = p.key;
+                    if ((ph = p.hash) > h)
+                        dir = -1;
+                    else if (ph < h)
+                        dir = 1;
+                    else if ((kc == null &&
+                                (kc = comparableClassFor(k)) == null) ||
+                                (dir = compareComparables(kc, k, pk)) == 0)
+                        dir = tieBreakOrder(k, pk);
+
+                    TreeNode<K,V> xp = p;
+                    if ((p = (dir <= 0) ? p.left : p.right) == null) {
+                        x.parent = xp;
+                        if (dir <= 0)
+                            xp.left = x;
+                        else
+                            xp.right = x;
+                        root = balanceInsertion(root, x);
+                        break;
+                    }
+                }
+            }
+        }
+        // 把根结点放到桶表头
+        moveRootToFront(tab, root);
+    }
+    ```
 * putTreeVal
     ```java
     final TreeNode<K,V> putTreeVal(HashMap<K,V> map, Node<K,V>[] tab,
@@ -50,6 +290,8 @@ HashMap
                             (q = ch.find(h, k, kc)) != null))
                         return q;
                 }
+
+                // 只能通过 System.identityHashCode(key) (根据内存地址计算的hashCode)
                 dir = tieBreakOrder(k, pk);
             }
 
@@ -71,7 +313,7 @@ HashMap
                 if (xpn != null)
                     ((TreeNode<K,V>)xpn).prev = x;
 
-                // 调整平衡, 把最新的根结点放到桶表头(平衡后根结点可能不在桶表头)
+                // 调整平衡, 把最新的根结点放到桶表头 (平衡后根结点可能不是桶表头的结点)
                 moveRootToFront(tab, balanceInsertion(root, x));
                 return null;
             }
@@ -178,149 +420,6 @@ HashMap
     }
     ```
     ![](RBTree.jpg)
-* put
-    ```JAVA
-    /**
-        初始化容量, 以及将容量加倍, 然后拆分列表(保持原有顺序)
-    */
-    final Node<K,V>[] resize();
-
-    final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
-                   boolean evict) {
-        Node<K,V>[] tab; Node<K,V> p; int n, i;
-
-        // 检查表的初始化
-        if ((tab = table) == null || (n = tab.length) == 0)
-            n = (tab = resize()).length;
-
-        // 计算hash, 如果桶中为空, 那就直接新建
-        if ((p = tab[i = (n - 1) & hash]) == null)
-            tab[i] = newNode(hash, key, value, null);
-        else {
-            Node<K,V> e; K k;
-            // 先判断是不是桶中第一个结点
-            // (这个快速判断有利于多次连续put同一个key的场景)
-            if (p.hash == hash &&
-                ((k = p.key) == key || (key != null && key.equals(k))))
-                e = p;
-            // 如果是红黑树, 按红黑树的方法加入节点
-            else if (p instanceof TreeNode)
-                e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
-            else {
-                // 在链表中查找, 直到找到key或者确认没找到
-                for (int binCount = 0; ; ++binCount) {
-                    if ((e = p.next) == null) {
-                        // 找不到则加入新结点
-                        p.next = newNode(hash, key, value, null);
-                        //检查要不要treeify
-                        if (binCount >= TREEIFY_THRESHOLD - 1) // -1 for 1st
-                            treeifyBin(tab, hash);
-                        break;
-                    }
-                    // 找到
-                    if (e.hash == hash &&
-                        ((k = e.key) == key || (key != null && key.equals(k))))
-                        break;
-                    p = e;
-                }
-            }
-            // e!=null 说明找到了, 更新值并返回旧值
-            if (e != null) { // existing mapping for key
-                V oldValue = e.value;
-                if (!onlyIfAbsent || oldValue == null)
-                    e.value = value;
-                afterNodeAccess(e);
-                return oldValue;
-            }
-        }
-        // 更新修改次数
-        ++modCount;
-        // 如果超过阈值, 要进行resize()
-        if (++size > threshold)
-            resize();
-        afterNodeInsertion(evict);
-        return null;
-    }
-
-    final void treeifyBin(Node<K,V>[] tab, int hash) {
-        int n, index; Node<K,V> e;
-
-        // 容量小于MIN_TREEIFY_CAPACITY = 64时, 只做resize()
-        if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY)
-            resize();
-
-        
-        else if ((e = tab[index = (n - 1) & hash]) != null) {
-            TreeNode<K,V> hd = null, tl = null;                    // hd保存头结点, tl保存上一次处理的结点
-            // 复制链表, 
-            // 新链表的Node为TreeNode
-            // 也是双链表(便于遍历, 以及后面复原成链表)
-            do {
-                TreeNode<K,V> p = replacementTreeNode(e, null);
-                if (tl == null)
-                    hd = p;
-                else {
-                    p.prev = tl;
-                    tl.next = p;
-                }
-                tl = p;
-            } while ((e = e.next) != null);
-            // 按红黑树的规则依次把每个结点加入红黑树并且重新平衡
-            if ((tab[index] = hd) != null)
-                hd.treeify(tab);
-        }
-    }
-
-    /** 
-        把链表的每个结点放到红黑树中, 并平衡, 最后把根结点放到桶表头
-    */
-    final void treeify(Node<K,V>[] tab) {
-        TreeNode<K,V> root = null;
-        // 依次把每个结点加入到红黑树中, 并重新平衡
-        for (TreeNode<K,V> x = this, next; x != null; x = next) {
-            next = (TreeNode<K,V>)x.next;
-            x.left = x.right = null;
-            if (root == null) {
-                x.parent = null;
-                x.red = false;
-                root = x;
-            }
-            else {
-                K k = x.key;
-                int h = x.hash;
-                Class<?> kc = null;
-                // 寻找插入结点的位置, 插入结点
-                for (TreeNode<K,V> p = root;;) {
-                    int dir, ph;
-                    K pk = p.key;
-                    if ((ph = p.hash) > h)
-                        dir = -1;
-                    else if (ph < h)
-                        dir = 1;
-                    else if ((kc == null &&
-                                (kc = comparableClassFor(k)) == null) ||
-                                (dir = compareComparables(kc, k, pk)) == 0)
-                        dir = tieBreakOrder(k, pk);
-
-                    TreeNode<K,V> xp = p;
-                    if ((p = (dir <= 0) ? p.left : p.right) == null) {
-                        x.parent = xp;
-                        if (dir <= 0)
-                            xp.left = x;
-                        else
-                            xp.right = x;
-                        root = balanceInsertion(root, x);
-                        break;
-                    }
-                }
-            }
-        }
-        // 把根结点放到桶表头
-        moveRootToFront(tab, root);
-    }
-    ```
-
-
 * get
     ```java
     final Node<K,V> getNode(int hash, Object key) {
@@ -403,7 +502,7 @@ HashMap
     }
 
     /**
-        通过红黑树结点的next指针来遍历所有结点, 复制成一条链表
+        通过红黑树结点的next指针来遍历所有结点, 复制成一条单链表
     */
     final Node<K,V> untreeify(HashMap<K,V> map) {
         Node<K,V> hd = null, tl = null;

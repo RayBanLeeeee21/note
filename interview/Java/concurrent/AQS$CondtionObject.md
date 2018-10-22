@@ -1,48 +1,70 @@
+Condition接口:
+* await()
+* awaitUninterruptibly()
+* awaitNanos(long)
+* await(long, TimeUnit)
+* awaitUntil(Date)
+* signal()
+* signalAll()
+
+先验知识:
+* LockSupport.park()在发生中断时直接返回, 不会抛中断异常, 但是可以通过中断标志来查询
+* wait()和sleep(long)在发生中断时会直接抛中断异常, 但会**复位中断标志**, 无法通过中断标志来查询
+    * 思考: 中断位与中断异常的组合可以区分不同的状态(4种)
+
 ConditionObject
 * 特点:
     * 该类为AbstractQueuedSynchronizer的**非静态**内部类, 可以访问外部类的资源
-    * 中断时直接返回的方法
+    * 中断时直接抛中断的方法
         * void await() throws InterruptedException
         * long awaitNanos(long nanosTimeout) throws InterruptedException
         * boolean awaitUntil(Date deadline) throws InterruptedException
         * boolean await(long time, TimeUnit unit) throws InterruptedException
     * 中断时不直接返回的方法
         * final void awaitUninterruptibly() 
+    * 与Object的wait比较
+        * **Object没有不可中断的wait**
+        * wait()之前都要先占有锁(synchronize/lock)
 * void awaitUninterruptibly()
     ```java
+    /**
+        awaitUninterruptibly()中发生中断只能通过查询中断标志来检查, 不会抛中断异常
+    */
     public final void awaitUninterruptibly() {
-        // 加到队尾, 顺便清理一下CANCELLED结点
+        // 1. 先清理一下CANCELLED结点, 再加入等待队列
         Node node = addConditionWaiter();              
 
-        // 尝试释放锁, 可能会抛出异常(非当前线程占有锁)
+        // 2. 检查是否自己持有锁
+        //      是则一次性释放锁
+        //      否则会抛IllegalMonitorStateException, 并把当前结点设为CANCELLED, 交给其它结点清理
         int savedState = fullyRelease(node);            
 
-        // 循环阻塞直到自己被加入同步队列        
+        // 3. 循环阻塞直到自己被加入同步队列
         boolean interrupted = false;                            
-        while (!isOnSyncQueue(node)) {                          
+        while (!isOnSyncQueue(node)) {                // 未加入到同步队列, 即仍处在等待队列     
             LockSupport.park(this);                             
-            if (Thread.interrupted())                 // 被唤醒后检查中断情况(并复位中断标志)
-                interrupted = true;     
+            if (Thread.interrupted())                 
+                interrupted = true;                   // 在同步队列中发生中断时, 只是简单记录中断情况
         }
-        if (acquireQueued(node, savedState)           // [1] 已进入同步队列(state数还原为savedState), 要继续等到自己获得锁
-            || interrupted)                                     // 并检查中断 
+        if (acquireQueued(node, savedState)           // [1] 加入同步队列, 在同步队列中会检查中断
+            || interrupted)                           // 双重检查中断
             selfInterrupt();
     }
-    // [1] interrupted 为 false时, 可能在同步队列中获取锁的过程中并不会发生中断, 所以要双重检查
+    // [1] acquireQueued中发生中断时不会直接抛异常, 只会把中断记录下来
 
     /**
-        加入新结点之前先检查一下有没CANCELLED结点, 有就先清理一下
+        等待队列中加入新结点之前先检查一下有没CANCELLED结点, 有就先清理一下
     */
     private Node addConditionWaiter() {
         Node t = lastWaiter;
         
-        // 最后一个结点不为Node.CONDITION时, 先清理
+        // 最后一个结点不为Node.CONDITION时, 先清理CANCELLED结点
         if (t != null && t.waitStatus != Node.CONDITION) {              
             unlinkCancelledWaiters();
             t = lastWaiter;
         }
 
-        // 新建结点, 加入队列尾部, 重设firstWaiter和lastWaiter
+        // [1] 新建结点, 加入队列尾部, 重设firstWaiter和lastWaiter
         Node node = new Node(Thread.currentThread(), Node.CONDITION);   
         if (t == null)
             firstWaiter = node;                                         
@@ -51,7 +73,10 @@ ConditionObject
         lastWaiter = node;                                              
         return node;
     }
-    
+    // [1] 此处对于等待队列的操作并非线程安全
+    //      如果一个线程A在持有锁的时候调用await*(), 另一个线程B在未持有锁的情况下调用await*()
+    //      那可能造成A的结点没有成功加入等待队列(另一个线程把结点覆盖掉), 最终一直阻塞下去
+    // 但如果所有线程都保证在持有锁时才await*(), 那await*()的调用就不会有并发问题, 从而线程安全
 
     /**
         从第一个结点开始遍历, 删除所有不为Node.CONDITION的结点
@@ -78,6 +103,7 @@ ConditionObject
 
     /**
         尝试将state减为0
+        尝试失败(非本线程占有)抛异常(无返回值)
     */
     final int fullyRelease(Node node) {
         boolean failed = true;
@@ -91,14 +117,14 @@ ConditionObject
                 throw new IllegalMonitorStateException();
             }
         } finally {
-            // [2] 异常或failed时都将Node取消, 此时该结点已经进入到等待队列了
+            // 结点已经进入等待队列,
+            // [2] 所以异常或failed时都将Node取消
             if (failed)                                     
                 node.waitStatus = Node.CANCELLED;           
         }   
     }
     // [1] 在ReentrantLock的tryRelease()实现中, 如果不是当前线程占用锁, 会抛出IllegalMonitorStateException, 直接到final块
     // [2] 异常时不会有返回值
-
 
     final boolean isOnSyncQueue(Node node) {
         // 条件1, 如果状态没变成signal或者没有prev结点
@@ -109,14 +135,17 @@ ConditionObject
         if (node.next != null)                                              
             return true;
 
-        // node.prev不为null, 可能是enq方法中CAS加入队尾失败,
-        // 但node很有可能在tail结点附近, 所以从tail开始找
-        // 除非再一次CAS失败, 只能再阻塞
+        // 如果在被unpark以后进入此方法, 那结点一定会在同步队列中, 一定能找到结点
+        // 如果还未进行park之前就被signal, 此时负责signal的线程可能正在enq()方法中尝试把当前结点加入同步队列
+        //      此时node.prev != null并不代表结点已经进行同步队列(可能CAS失败), 所以要从tail开始检查
+        //          如果检查时已经enq成功, 那可以找到结点
+        //          如果依然没有enq成功, 那就只能阻塞
+        //              由于负责signal的线程仍然在enq中循环尝试, 一旦成功就会再次唤醒当前结点, 所以不会死锁
         return findNodeFromTail(node);
     }
 
     /**
-    *   从tail开始向前遍历同步队列查找node结点
+    *   从tail到head检查node是否在同步队列中
     */
     private boolean findNodeFromTail(Node node) {
         Node t = tail;
@@ -147,26 +176,31 @@ ConditionObject
         从first开始, 逐个transferForSignal, 处理完一个删掉一个, 直到成功一个结点或者全部丢弃
     */
     private void doSignal(Node first) {
-        // 每次从等待队列取一个结点
+        // 遍历等待队列, 只到成功保证等待的结点可以被唤醒
         do {
             if ( (firstWaiter = first.nextWaiter) == null)           
                 lastWaiter = null;
             first.nextWaiter = null;                          
-        } while (!transferForSignal(first) &&                // 成功唤醒一个结点时退出
+        } while (!transferForSignal(first) &&                // 成功时返回
                     (first = firstWaiter) != null);          // 或遍历到等待队列的结尾时退出
     }
 
     final boolean transferForSignal(Node node) {
 
-        // [1] 如果node的状态不是CONDITION, 那就是CANCELLED结点, 返回false表示跳过该结点
+        // [1] 如果node的状态不是CONDITION, 可能是CANCELLED结点或者与可中断await()竞争失败
+        //      失败时直接跳过当前结点
         if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))       
             return false;                                           
 
-        // 循环CAS将node加入同步队列, 得到node的pre结点    
+        // 循环CAS将node加入同步队列, 得到node的pre结点
+        // 以下条件唤醒node:
+        //     1. 上个结点p变成CANCELLED
+        //     2. 当前线程没有为node设置SIGNAL结点
+        // node被唤醒以后会清理CANCELLED结点, 并为自己设置SIGNAL结点, 或者作为头结点获得锁
         Node p = enq(node);                                          
         int ws = p.waitStatus;                                          
-        if (ws > 0                                                   // 检查上一个结点有没变成CANCELLED, 若有则唤醒node来清理
-            || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))         // CAS竞争失败时, 唤醒结点后, 结点发现还会获得锁, 继续循环阻塞
+        if (ws > 0                                                   
+            || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))         
             LockSupport.unpark(node.thread);
         return true;
     }
@@ -176,6 +210,7 @@ ConditionObject
 * void signalAll()
     ```java
     public final void signalAll() {
+        // 检查锁的持有
         if (!isHeldExclusively())
             throw new IllegalMonitorStateException();
         Node first = firstWaiter;
@@ -185,6 +220,7 @@ ConditionObject
 
     /**
         从first开始, 逐个transferForSignal, 处理完一个删掉一个
+        保证每个结点被加入到同步队列, 并且有机会被唤醒
     */
     private void doSignalAll(Node first) {
         lastWaiter = firstWaiter = null;
@@ -199,37 +235,37 @@ ConditionObject
 * void await() 
     * 特点:
         * 中断发生时需要在同步队列中等待, 所以不一定能及时抛出中断 
-        * 如果在signal()后被中断, 那不会抛异常, 但是中断符号会被置位
+        * 如果在signal()后被中断, 只是**置位中断符号**
     ```java
     public final void await() throws InterruptedException {
-        // 先检查中断
+        // 1. 首先检查中断
         if (Thread.interrupted())                                           
             throw new InterruptedException();                               
         
-        // 加入队尾, 顺便清理CANCELLED结点
+        // 2. 清理CANCELLED结点, 然后加入队尾
         Node node = addConditionWaiter();
         
-        // 尝试释放全部state, 可能抛异常(非当前线程占有锁)
+        // 3. 如果自己持有锁则释放锁, 否则抛异常, 并把当前结点设为CANCELLED, 由其它结点清理
         int savedState = fullyRelease(node);
 
-        // 循环阻塞, 直到被加入到同步队列, 同时要判断中断情况
+        // 4. 循环阻塞, 直到被加入到同步队列, 同时要判断中断情况
         int interruptMode = 0;
         while (!isOnSyncQueue(node)) {
             LockSupport.park(this);
-            if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)   // THROW_IE(1)中断发生在
+            if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)   // 发生中断时判断中断发生时机, 然后跳出循环
                 break;
         }
 
-        // 上面的checkInterruptWhileWaiting()操作完成后, 结点已进入到同步队列
-        // 在同步队列中获取锁时还要检查中断发生的情况, 此时interruptMode可能为0
+        // 在同步队列中发生中断, 都只是在中断标志上置位
         if (acquireQueued(node, savedState) && interruptMode != THROW_IE)   //[1]
             interruptMode = REINTERRUPT;
 
-        // 后续不为null时, 清理CANCELLED结点
+        // 后续不为null时, 清理CANCELLED结点 (当前结点可能发生中断而成为CANCELLED)
         if (node.nextWaiter != null) 
             unlinkCancelledWaiters();
 
-        // 中断发生, 处理中断(抛出异常或置位)
+        // 如果中断发生在被signal()之前, 则抛Interrupted异常
+        // 如果中断发生在被signal()之后, 则置位中断符号
         if (interruptMode != 0)
             reportInterruptAfterWait(interruptMode);
     }
@@ -247,10 +283,11 @@ ConditionObject
     }
 
     /**
-        将结点加入同步队列, 并判断该操作在signal()之前(true)还是之后(false)
+        将结点加入同步队列, 
+            与signal竞争失败时返回false, 否则true
     */
     final boolean transferAfterCancelledWait(Node node) {
-        // 循环CAS尝试加入等待队列
+        // CAS尝试把waitStatus从CONDITION变成0 (与signal线程竞争)
         if (compareAndSetWaitStatus(node, Node.CONDITION, 0)) {
             enq(node);
             return true;
@@ -300,20 +337,21 @@ ConditionObject
             int interruptMode = 0;
             while (!isOnSyncQueue(node)) {
                 
-                // 超时时, 尝试将结点加入同步队列
+                // 1. 超时时, 尝试将结点加入同步队列 (与signal线程竞争)
                 if (nanosTimeout <= 0L) {                         
-                    // 判断signal()发生前后的结果被丢弃                
                     transferAfterCancelledWait(node);             
                     break;
                 }
 
-                // 剩余超时大于阈值时, 才阻塞, 否则自旋
+                // 2. 剩余超时大于阈值时, 才阻塞, 否则自旋
                 if (nanosTimeout >= spinForTimeoutThreshold)                   
                     LockSupport.parkNanos(this, nanosTimeout);                    
 
-                // 被唤醒时, 检查有没中断, 有中断则根据signal()发生情况来确定中断模式
+                // 3. 被唤醒时, 检查有没中断, 有中断则根据signal()发生情况来确定中断模式
                 if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)   
                     break;
+
+                // 4. 更新时间
                 nanosTimeout = deadline - System.nanoTime();
             }
 

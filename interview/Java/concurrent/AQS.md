@@ -4,6 +4,20 @@ AQS
     * 0: 未初始化或者运行结点
 * 注意:
     * 共享锁不完全符合共享的语义: 一个写锁释放时, 不是所有的读线程都能同时获得读锁, 只有同步队列中靠近head的能被通知到的读线程才能获得
+* 结点处理机制:
+    * 中断或超时: 
+        * 被中断或者超时时转成CANCELLED
+        * 该结点会把前后连续的CANCELLED结点都清理掉
+        * 然后将前续结点设成signal并连接到下一个有效的结点(如果可以的话), 或者自己唤醒后续结点
+    * 进入阻塞:
+        * 结点在进入阻塞之前, 把自己前面的CANCELLED结点清理掉, 然后把第一个可以设为SIGNAL的结点设成SIGNAL, 告诉它唤醒自己
+        * 把前一个结点设成SIGNAL以后不能马上阻塞, 还要再检查一次自己是否为首结点的下一个
+    * 被唤醒:
+        * 结点在成为首结点的下个结点时, 会把首结点清理掉
+        * 如果是共享锁, 那还要把下一个共享结点唤醒(传播)
+    * 释放:
+        * 结点在释放成功时, 检查有没需要被唤醒的结点, 有的话就唤醒一个
+        * 被唤醒的结点负责清理上一个首结点
 * 队列加入算法 (acquire中用到):
     ```java
     private Node addWaiter(Node mode) {
@@ -73,7 +87,8 @@ AQS
                     interrupted = true;                         // 
             }
         } finally {
-            // 在acquire()中, 线程发生异常时, 只置位中断符号, 所以不会引发cancel
+            // 在acquire()中, 线程发生异常时, 只置位中断符号
+            // 所以正常情况下, acquire()不会引发cancel
             if (failed)                            
                 cancelAcquire(node);
         }
@@ -138,6 +153,9 @@ AQS
     //      触发条件二: pred也出异常将自己cancelled掉
     //      触发条件三: pred无线程(pred出异常但还没来得及将自己cancelled掉) 
 
+    /**
+        检查能否实现阻塞(上一个node是否为signal)
+    */
     private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
         int ws = pred.waitStatus;
 
@@ -151,7 +169,11 @@ AQS
             } while (pred.waitStatus > 0);
             pred.next = node;
         // [1] 告诉上个结点要唤醒自己 (这种情况下不能阻塞, 以防上个结点刚好解锁)
-        } else {                                
+        } else {                           
+            // 上个结点可能是PROPAGATE或者0, (不可能是CONDITION)
+            // PROPAGATE表示SHARED结点
+            // 0表示结点未初始化或者已经signal过了
+            // 在这种情况下才能设为SIGNAL
             compareAndSetWaitStatus(pred, ws, Node.SIGNAL); 
         }
         return false;
@@ -165,9 +187,9 @@ AQS
         // 单次尝试
         if (tryRelease(arg)) {                      
             Node h = head;
-            // 判断结点是否有效(null: 尚未初始化, 比如新建AQS后直接release(), h.waitStatus = 0: 其它线程正在释放 )
+            // 判断结点是否有效(null: 尚未初始化, 比如新建AQS后直接release())
             if (h != null && h.waitStatus != 0)     
-                unparkSuccessor(h);                 // 唤醒下一个
+                unparkSuccessor(h);                 // 成功释放时, 唤醒下一个结点
             return true;
         }
         return false;
@@ -222,7 +244,7 @@ AQS
                         return;
                     }
                 }
-                if (shouldParkkAfterFailedAcquire(p, node) &&
+                if (shouldParkAfterFailedAcquire(p, node) &&
                     parkAndCheckInterrupt())
                     interrupted = true;
             }
@@ -237,11 +259,14 @@ AQS
         Node h = head; // Record old head for check below
         setHead(node);
 
-        if (propagate > 0 || h == null || h.waitStatus < 0 || (h = head) == null ||  // 强迫症?
-            h.waitStatus < 0) {
+        if (propagate > 0 
+            || h == null || h.waitStatus < 0 
+            || (h = head) == null || h.waitStatus < 0
+        ) {
             Node s = node.next;             
             // node.next为shared结点时, 唤醒该结点
-            // node.next表现为null时, 也要唤醒. 如果不小心唤醒一个非shared结点, 该结点发现自己不在队头, 会再阻塞
+            // node.next表现为null时, 也要唤醒. 
+            // 如果不小心唤醒一个非shared结点, 该结点发现自己不在队头, 会再阻塞
             if (s == null || s.isShared())  
                 doReleaseShared();
         }
@@ -255,7 +280,7 @@ AQS
             if (h != null && h != tail) {
 
                 // 如果该结点被设为SIGNAL, 那就要把自己(head)设为0, 并负责唤醒后续最接近的一个结点
-                // 被唤醒的结点负责清理之前的head结点
+                // 设为0表示结点已经完成了signal, 被唤醒的结点负责清理之前的head结点
                 int ws = h.waitStatus;
                 if (ws == Node.SIGNAL) {
                     if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
@@ -282,8 +307,7 @@ AQS
         return false;
     }    
     ```
-
-    * acquireInterruptedly
+* acquireInterruptedly
     ```java
     public final void acquireInterruptibly(int arg)
             throws InterruptedException {
@@ -318,7 +342,7 @@ AQS
         }
     }
     ```
-    * tryAquireNanos
+* tryAquireNanos
     ```java
     private boolean doAcquireNanos(int arg, long nanosTimeout)
             throws InterruptedException {
