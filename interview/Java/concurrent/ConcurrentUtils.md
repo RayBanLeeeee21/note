@@ -108,23 +108,53 @@ CyclicBarrier
     * reset后或者barrierCommand异常时, 所有线程broken
     * barrierCommand由最后一个await()的线程执行
     * 多个线程同时被中断时, 只有最后抢到锁的线程能抛出中断, 其它非中断线程broken, 而中断的线程broken+interrupted
+* 与CountDownLatch相比
+    * CyclicBarrier可重复使用
+    * 到达以后可以调用command.run()
 *   源代码
     ```java
 
+    /**
+        将generation设为broken, 并通知所有等待线程, 重置count
+            由于breakBarrier只在上锁的情况下被调用, 因此三个语句的顺序并不重要
+    */
     private void breakBarrier(){
         generation.broken = true;   // broken符号置位
         count = parties;            // count 重置
         trip.signalAll();           // 通知所有阻塞的线程
     }
 
-    // 每一个周期都属于一个generation(generation 只有一个broken flag)
-    private void nextGeneration() {
-        
+    /**
+        将generation替换掉, 并通知所有等待线程, 重置count
+            由于nextGeneration只在上锁的情况下被调用, 因此三个语句的顺序并不重要
+    */
+    private void nextGeneration() {   
         trip.signalAll();               // 换代时要先唤醒await中的线程
         count = parties;                // count 重置
         generation = new Generation();  // 换代
     }
 
+    public void reset() {
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            breakBarrier();   // break the current generation
+            nextGeneration(); // start a new generation
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+        循环阻塞之前
+            检查broken
+            检查中断
+            检查到达情况, 到达则执行command.run(), 成功后通知其它线程已经换代
+        循环中
+            检查中断
+            检查broken
+            检查超时
+    */
     private int dowait(boolean timed, long nanos)
         throws InterruptedException, BrokenBarrierException,
                TimeoutException {
@@ -141,11 +171,13 @@ CyclicBarrier
                 throw new BrokenBarrierException();
 
             // 如果发生中断, 抛中断异常 (可能会触发其它线程的BrokenBarrierException) 
+            // 清除中断标志
             if (Thread.interrupted()) {
                 breakBarrier();
                 throw new InterruptedException();
             }
 
+            // 更新count
             int index = --count;
             // 如果全部线程已经到达
             if (index == 0) {  
@@ -157,7 +189,7 @@ CyclicBarrier
                         command.run();
                     ranAction = true;
 
-                    // 换代(换代时会signalAll())
+                    // 只有在完全成功的时候才会换代
                     nextGeneration();
                     return 0;
                 } finally {
@@ -176,9 +208,9 @@ CyclicBarrier
                         trip.await();
                     else if (nanos > 0L)
                         nanos = trip.awaitNanos(nanos);
-                } catch (InterruptedException ie) {
+                } catch (InterruptedException ie) {         //检查中断
 
-                    // 发生中断时, 如果没换代, 抛出中断异常
+                    // 发生中断时, 如果没换代, 而且没有broken
                     if (g == generation && ! g.broken) {
                         breakBarrier();
                         throw ie;
@@ -222,7 +254,7 @@ CyclicBarrier
     }
     ```
 
-Semaphore
+Semaphore: 实质上是个不可重入的限制state次数的锁
 * 行为:
     * void acquire()/acquire(int): 可中断, 阻塞尝试 (共享型)
     * void acquireUninterruptibly()/acquireUninterruptibly(int): 不可中断, 阻塞尝试 (共享型)

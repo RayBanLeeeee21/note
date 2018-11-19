@@ -5,9 +5,9 @@ ConcurrentHashMap
 * 特性:
     * key/value不能为null (HashMap可以)
 * HashEntry
-    * 域
-        * final int hash
-        * final K key
+    * 域    
+        * final K key: key不可更改, 改了可能永远无法找到结点
+        * final int hash: key不可更改, 则hash也不可更改
         * volatile V value
         * volatile HashEntry<K,V> next
 * 默认属性:
@@ -17,13 +17,13 @@ ConcurrentHashMap
     * MIN_SEGMENT_TABLE_CAPACITY = 2 (实际分配时, segment的表大小默认为2, 表大小总和为32)
 * 相关属性计算
     1. ssize(segment的个数): 
-        * 不超过MAX_SEGMENTS = 1<<16, 高位留给segment;  // 为了方便用 & 操作来求余
-        * 不小于concurrencyLevel的2的幂
+        * 不小于concurrencyLevel的2的幂                 // 为了方便用 & 操作来求余
+        * 不超过MAX_SEGMENTS = 1<<16, 高位留给segment;  
     2. 初始容量
         * 不超过MAXIMUM_CAPACITY = 1<<30    
     3. segment容量
-        * 不小于 ceil(initCap / ssize) 的2的幂          // 为了方便用 & 操作来求余
-        * 不小于MIN_SEGMENT_TABLE_CAPACITY = 2
+        * roundToPowerOf2(initCap / ssize)             // 为了方便用 & 操作来求余
+        * 不小于MIN_SEGMENT_TABLE_CAPACITY = 2          
     ```java
     public ConcurrentHashMap(int initialCapacity,
                              float loadFactor, int concurrencyLevel) {
@@ -62,7 +62,7 @@ ConcurrentHashMap
             new Segment<K,V>(loadFactor, (int)(cap * loadFactor),
                              (HashEntry<K,V>[])new HashEntry[cap]);
         Segment<K,V>[] ss = (Segment<K,V>[])new Segment[ssize];
-        UNSAFE.putOrderedObject(ss, SBASE, s0); // ordered write of segments[0]
+        UNSAFE.putOrderedObject(ss, SBASE, s0); // 非volatile写
         this.segments = ss;
     }
     ```
@@ -86,10 +86,44 @@ ConcurrentHashMap
         return s.put(key, hash, value, false);
     }
 
+    /**
+        volatile读+双检查确认segment的存在, 并以循环volatile读 & CAS写入的方式创建segment
+    */
+    private Segment<K,V> ensureSegment(int k) {
+        final Segment<K,V>[] ss = this.segments;
+        long u = (k << SSHIFT) + SBASE; 
+        Segment<K,V> seg;
+
+        // volatile读确认是否存在
+        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
+            // 参照第0个segment的参数, 创建新表(相对耗时间)
+            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
+            int cap = proto.table.length;
+            float lf = proto.loadFactor;
+            int threshold = (int)(cap * lf);
+            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
+
+            // 第二次volatile读检查
+            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                == null) { // recheck
+                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
+
+                // 循环做 volatile读+CAS写
+                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                       == null) {
+                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
+                        break;
+                }
+            }
+        }
+        return seg;
+    }
+
     //
     final V put(K key, int hash, V value, boolean onlyIfAbsent) {
 
-        // 循环CAS尝试取得锁, 多次不成功再以阻塞方式获取. 循环的过程中顺便找结点, 或者创建新结点 
+        // 循环CAS尝试取得锁, 多次不成功再以阻塞方式获取. 
+        // 循环尝试之前先顺便找一下结点, 不存在则创建新结点
         HashEntry<K,V> node = tryLock() ? null :
             scanAndLockForPut(key, hash, value);
 
@@ -105,9 +139,9 @@ ConcurrentHashMap
                 if (e != null) {
                     K k;
                     // 判断key是否相等, 如果相等, 那就只做修改, 更新modCount
-                    if ((k = e.key) == key ||   // 1. 如果对象id相等, 那一定相等, 速度最快
-                        (e.hash == hash &&      // 2. 如果hash不等, 那一定不相等
-                        key.equals(k))) {       // 3. 最后再用equals方法比较
+                    if ((k = e.key) == key ||   // 1. 如果对象id相等, 那一定相等, 速度快
+                        (e.hash == hash &&      // 2. 如果hash不等, 那一定不相等, 速度快
+                        key.equals(k))) {       // 3. 最后再用equals方法比较, 速度慢
                         oldValue = e.value;
                         if (!onlyIfAbsent) {
                             e.value = value;
@@ -130,7 +164,7 @@ ConcurrentHashMap
                     if (c > threshold && tab.length < MAXIMUM_CAPACITY)
                         rehash(node);                           // rehash并加入新结点
                     else
-                        setEntryAt(tab, index, node);           // putOrderedObject加入新结点
+                        setEntryAt(tab, index, node);           // 已经上锁, 只用非volatile写加入新结点
                     ++modCount;
                     count = c;
                     oldValue = null;
@@ -143,38 +177,7 @@ ConcurrentHashMap
         return oldValue;
     }
 
-    /**
-        volatile读+双检查确认segment的存在, 并以循环volatile读 & CAS写入的方式创建segment
-    */
-    private Segment<K,V> ensureSegment(int k) {
-        final Segment<K,V>[] ss = this.segments;
-        long u = (k << SSHIFT) + SBASE; 
-        Segment<K,V> seg;
-
-        // volatile确认是否存在
-        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
-            // 参照第0个segment的参数, 先做准备工作(相对耗时间)
-            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
-            int cap = proto.table.length;
-            float lf = proto.loadFactor;
-            int threshold = (int)(cap * lf);
-            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
-
-            // 第二次volatile检查
-            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
-                == null) { // recheck
-                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
-
-                // 循环做 volatile读+CAS写
-                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
-                       == null) {
-                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
-                        break;
-                }
-            }
-        }
-        return seg;
-    }
+    
 
     private HashEntry<K,V> scanAndLockForPut(K key, int hash, V value) {
         // volatile读取segment对应位置的首结点
@@ -262,7 +265,7 @@ ConcurrentHashMap
             }
         }
 
-        // 最后把新结点加入新表中的位置
+        // 最后把新结点加入新表的对应位置的表头
         int nodeIndex = node.hash & sizeMask; 
         node.setNext(newTable[nodeIndex]);
         newTable[nodeIndex] = node;
@@ -324,7 +327,8 @@ ConcurrentHashMap
                 if ((k = e.key) == key ||
                     (e.hash == hash && key.equals(k))) {
                     V v = e.value;
-                    if (value == null || value == v || value.equals(v)) {
+                    if (value == null 
+                        || value == v || value.equals(v)) { // key不为null时, 表示需要满足value也相同的条件才能删除
                         if (pred == null)
                             setEntryAt(tab, index, next);
                         else

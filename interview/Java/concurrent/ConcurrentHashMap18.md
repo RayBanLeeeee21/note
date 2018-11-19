@@ -3,6 +3,7 @@
 ConcurrentHashMap
 * 特性:
     * key/value不能为null (HashMap可以)
+    * ConcurrentHashMap18的实际初始化桶表容量比给定桶表容量大
 * Node
     * 域
         * final int hash
@@ -12,6 +13,7 @@ ConcurrentHashMap
 * 初始化默认属性:
     * 表容量: 16
     * loadFactor: 0.75
+        * ConcurrentHashMap中虽然提供了loadFactor参数, 但实际loadFactor一直为0.75
 * 默认属性:
     * DEFAULT_CAPACITY = 16
 * 相关属性计算
@@ -47,7 +49,7 @@ ConcurrentHashMap
                         sc = n - (n >>> 2); // loadFactor为0.75
                     }
                 } finally {
-                    // 1.2.2. 表初始化完成, sizeCtl用来保存阈值
+                    // 1.2.2. 表初始化完成, sizeCtl用来保存新的阈值
                     sizeCtl = sc;
                 }
                 break;
@@ -81,7 +83,7 @@ ConcurrentHashMap
         if (initialCapacity < concurrencyLevel)   // Use at least as many bins
             initialCapacity = concurrencyLevel;   // as estimated threads
 
-        // sizeCtl和实际表容量cap 为 RoundToPower( initialCapacity / loadFactor )
+        // sizeCtl和实际表容量cap 为 RoundToPowerOf2( initialCapacity / loadFactor )
         long size = (long)(1.0 + (long)initialCapacity / loadFactor);
         int cap = (size >= (long)MAXIMUM_CAPACITY) ?
             MAXIMUM_CAPACITY : tableSizeFor((int)size);
@@ -197,7 +199,7 @@ ConcurrentHashMap
                 synchronized (b) {
                     // 1.2.1 抢到还要再检查一次表头有没被更新
                     // 只有删除才可能改变头结点, 删完不用更新
-                    // 如果删除完还有新线程加入结点, 那就由它来treeifyBin
+                    // 如果删除完还有新线程加入结点, 那就由新线程来treeifyBin
                     if (tabAt(tab, index) == b) {
                         TreeNode<K,V> hd = null, tl = null;
                         // 1.2.1.1 复制链表, 新链表的结点为TreeNode
@@ -368,7 +370,8 @@ ConcurrentHashMap
      * 因为resize是滞后的。
      *
      * @param x the count to add
-     * @param check if <0, don't check resize, if <= 1 only check if uncontended
+     * @param check: 
+     *    check >=2 (即链表长度>=2 或者桶中为红黑树), 则要检查是否需要扩容
      */
     //
     private final void addCount(long x, int check) {
@@ -407,7 +410,7 @@ ConcurrentHashMap
                 int rs = resizeStamp(n);                                            
                 if (sc < 0) {
                     if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 迁移标志被撤, 迁移已完成
-                        || sc == rs + 1                     // 
+                        || sc == rs + 1                      
                         || sc == rs + MAX_RESIZERS 
                         || (nt = nextTable) == null         // nextTable被撤, 迁移已完成
                         || transferIndex <= 0)              // 所有stripe已被处理完
@@ -418,7 +421,8 @@ ConcurrentHashMap
                 }
 
                 // 自己尝试发起迁移
-                //     sc前16位作为flag表示正在迁移, 后16位用来记录参与迁移的线程数
+                //     sc第1位为0表示正在迁移, 2-16位用来表示迁移的轮次 
+                //     后16位用来记录参与迁移的线程数
                 //     争夺成功则sizeCtl改成0x800A0000
                 else if (U.compareAndSwapInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
@@ -530,7 +534,7 @@ ConcurrentHashMap
                 return;
             }
             nextTable = nextTab;
-            transferIndex = n;                                                 // 设置第一个stripe的起点
+            transferIndex = n;                                         // 设置第一个stripe的起点
         }
         int nextn = nextTab.length;
         ForwardingNode<K,V> fwd = new ForwardingNode<K,V>(nextTab);    //[1] 
@@ -575,7 +579,7 @@ ConcurrentHashMap
                 }
 
                 if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
-                    // 判断自己是不是最后一个完成的
+                    // 如果自己是最后一个完成的, 那直接返回
                     if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)       
                         return;
                     
