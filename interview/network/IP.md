@@ -10,3 +10,6 @@
     * OSPF(Open Shortest Path First开放式最短路径优先)
         * 机制: 当相邻路由信息更改时, 用洪泛法通知全网的路径器
         * 实现: IP协议, 以组播方式发送
+
+IP类别:
+* ![](ip_class.png)
