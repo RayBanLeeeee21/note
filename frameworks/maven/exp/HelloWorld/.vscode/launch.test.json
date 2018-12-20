@@ -1,0 +1,30 @@
+{
+    "run": {
+        "default": "",
+        "items": [
+            {
+                "name": "hello-world",
+                "projectName": "hello-world",
+                "workingDirectory": "/media/raybanleeeee/Edisk/RaybanLeeeee/note/programming/java/maven/maven实战/chapter_02/HelloWorld",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    },
+    "debug": {
+        "default": "",
+        "items": [
+            {
+                "name": "hello-world",
+                "projectName": "hello-world",
+                "workingDirectory": "/media/raybanleeeee/Edisk/RaybanLeeeee/note/programming/java/maven/maven实战/chapter_02/HelloWorld",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    }
+}

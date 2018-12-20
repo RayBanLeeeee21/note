@@ -1,0 +1,30 @@
+{
+    "run": {
+        "default": "",
+        "items": [
+            {
+                "name": "rpc-client",
+                "projectName": "rpc-client",
+                "workingDirectory": "e:\\RaybanLeeeee\\note\\basic-courses\\distributed-architecture\\distributed-systems-concepts-and-design\\distributed-system\\rpc\\rpc-client",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    },
+    "debug": {
+        "default": "",
+        "items": [
+            {
+                "name": "rpc-client",
+                "projectName": "rpc-client",
+                "workingDirectory": "e:\\RaybanLeeeee\\note\\basic-courses\\distributed-architecture\\distributed-systems-concepts-and-design\\distributed-system\\rpc\\rpc-client",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    }
+}
