@@ -1,10 +1,13 @@
 # chapter 05 远程调用
 
-远程过程调用(Remote Procedure Call): 
-* 将过程调用的概念扩展到分布式系统
+远程调用:
+* 远程过程调用(Remote Procedure Call): 将过程调用的概念扩展到分布式系统
+* 远程方法调用(Remote Method Invocation): 将面向对象的概念(包括对象引用等)扩展到分布式系统
 
-远程方法调用(Remote Method Invocation): 
-* 将面向对象的概念(包括对象引用等)扩展到分布式系统
+
+课外实例研究 *:
+* Sun RPC
+* Java RMI 
 
 
 ## 5.2 **请求-应答协议**
