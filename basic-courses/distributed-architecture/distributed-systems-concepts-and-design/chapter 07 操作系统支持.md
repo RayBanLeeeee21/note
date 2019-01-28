@@ -248,6 +248,7 @@
 
 #### 7.4.3.x 快速线程包
 
+
 [1] [Scheduler Activations: Effective Kernel Support for the User-Level Management of Parallelism](http://bnrg.cs.berkeley.edu/~adj/cs262/papers/Scheduler.pdf)
 
 特点: 
