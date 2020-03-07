@@ -1,0 +1,79 @@
+/** 
+    自定义的 Markdown 预览风格.
+    适用于 Visual Studio Code 的markdown预览插件Markdown Preview Enhanced
+*/
+
+html {
+
+    body {
+
+        font-size:14px;
+        font-family: 'Consolas', Times, serif;
+        background-color: #542;
+
+        
+
+        .markdown-preview {
+
+            max-width: 800px;    
+            padding-left: 500px;
+            background-color:#362712;
+            h1 { color: #fff; font-size: 30px } // 一级标题
+            h2 { color: #ddd; font-size: 26px } // 二级标题
+            h3 { color: #bbb; font-size: 23px } // 三级标题
+            h4 { color: #999; font-size: 20px } // 四级标题
+        
+            img{
+                min-width: 300px;   // 最小尺寸
+                max-width: 800px;
+                margin:0 10%;
+                width: 80%
+            }                     
+
+            p { color: #ddd}
+
+            li > p{ color: inherit }
+        
+            ul+ul{ // 
+              margin-top: 5px;
+            }
+        
+            ul{ // 一级列表
+                line-height: 1.3;  // 行高(多倍行距)
+                color:#ea6; 
+                ul{  // 二级列表
+                    color:#bb7; 
+                    ul{  // 三级列表
+                        color:#7aa; 
+                        ul{ // 四级列表
+                            color:#aa8;
+                            ul{  // 五级列表
+                                color:#8b6;
+                                ul{  // 六级列表
+                                    color:#ea6 
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        
+            em{ color:#ea0 };
+        
+            strong { color:#d06040; font-weight:bold; }
+        
+            code, pre[data-role="codeBlock"]{
+                background-color: #ffffff-#542;
+                max-width: 800px;
+                filter:invert(1)
+            }
+
+            table {
+                th { font-weight:bold; color:#ea6; }
+                td{ color:#bb7; }
+            }
+        }
+    }
+}
+
+html body[for="html-export"]:not([data-presentation-mode]) .markdown-preview {padding: 2em}
