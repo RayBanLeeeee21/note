@@ -1,0 +1,80 @@
+html body {
+  font-size: 14px;
+  font-family: 'Consolas', Times, serif;
+  background-color: #542;
+}
+html body .markdown-preview {
+  max-width: 800px;
+  padding-left: 500px;
+  background-color: #362712;
+}
+html body .markdown-preview h1 {
+  color: #fff;
+  font-size: 30px;
+}
+html body .markdown-preview h2 {
+  color: #ddd;
+  font-size: 26px;
+}
+html body .markdown-preview h3 {
+  color: #bbb;
+  font-size: 23px;
+}
+html body .markdown-preview h4 {
+  color: #999;
+  font-size: 20px;
+}
+html body .markdown-preview img {
+  min-width: 300px;
+  max-width: 800px;
+  margin: 0 10%;
+  width: 80%;
+}
+html body .markdown-preview li > p {
+  color: inherit;
+}
+html body .markdown-preview ul + ul {
+  margin-top: 5px;
+}
+html body .markdown-preview ul {
+  line-height: 1.3;
+  color: #ea6;
+}
+html body .markdown-preview ul ul {
+  color: #bb7;
+}
+html body .markdown-preview ul ul ul {
+  color: #7aa;
+}
+html body .markdown-preview ul ul ul ul {
+  color: #aa8;
+}
+html body .markdown-preview ul ul ul ul ul {
+  color: #8b6;
+}
+html body .markdown-preview ul ul ul ul ul ul {
+  color: #ea6;
+}
+html body .markdown-preview em {
+  color: #ea0;
+}
+html body .markdown-preview strong {
+  color: #d06040;
+  font-weight: bold;
+}
+html body .markdown-preview code,
+html body .markdown-preview pre[data-role="codeBlock"] {
+  background-color: #aabbdd;
+  max-width: 800px;
+  filter: invert(1);
+}
+html body .markdown-preview table th {
+  font-weight: bold;
+  color: #ea6;
+}
+html body .markdown-preview table td {
+  color: #bb7;
+}
+html body[for="html-export"]:not([data-presentation-mode]) .markdown-preview {
+  padding: 2em;
+}
