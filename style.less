@@ -8,10 +8,9 @@ html {
     body {
 
         font-size:14px;
-        font-family: 'Consolas', Times, serif;
+        font-family: 'Consolas', 'Yahei' Times, serif;
         background-color: #542;
-
-        
+        line-height: 1.5;
 
         .markdown-preview {
 
@@ -26,30 +25,33 @@ html {
             img{
                 min-width: 300px;   // 最小尺寸
                 max-width: 800px;
-                margin:0 10%;
+                margin:20px 0;
                 width: 80%
-            }                     
+            }
+            
+   
 
-            p { color: #ddd}
+            p { color: #ddd; margin: 0; }
 
-            li > p{ color: inherit }
+            li > p{ color: inherit; margin-top: 0; }
         
-            ul+ul{ // 
+            ul+ul, ol+ul, ul+ol, ol+ol{ // 
               margin-top: 5px;
             }
         
-            ul{ // 一级列表
-                line-height: 1.3;  // 行高(多倍行距)
+            ul, ol{ // 一级列表
+                
+                
                 color:#ea6; 
-                ul{  // 二级列表
+                ul, ol{  // 二级列表
                     color:#bb7; 
-                    ul{  // 三级列表
+                    ul, ol{  // 三级列表
                         color:#7aa; 
-                        ul{ // 四级列表
+                        ul, ol{ // 四级列表
                             color:#aa8;
-                            ul{  // 五级列表
+                            ul, ol{  // 五级列表
                                 color:#8b6;
-                                ul{  // 六级列表
+                                ul, ol{  // 六级列表
                                     color:#ea6 
                                 };
                             };
