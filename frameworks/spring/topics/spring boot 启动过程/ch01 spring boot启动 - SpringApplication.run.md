@@ -20,13 +20,11 @@ public SpringApplication(ResourceLoader resourceLoader, Class<?>... primarySourc
     this.mainApplicationClass = deduceMainApplicationClass();   
 }
 
-//...
-
 ```
 ### 1.1 推断web类型
 
-推断Web容器类型时, 通过判断是否存在特定类(或者缺少特定的必要类), 来判断Web容器类型(React/Servlet/无Web容器). 
-类是否存在, 通过``ClassLoader#forName()``来判断, 默认情况下是查找``classpath``路径下的类.
+推断Web容器类型时, 通过判断是否存在特定类(或者缺少特定的必要类), 来推断出Web容器类型(React/Servlet/无Web容器). 
+类的存在与否, 则通过``ClassLoader#forName()``来判断, 默认情况下是查找类路径下的类.
 
 ```java
 
@@ -52,11 +50,11 @@ static WebApplicationType deduceFromClasspath() {
 
 ### 1.2 通过SpringFactoriesLoader配置Initializer和Listener实现类
 
-``SpringApplication#getSpringFactoriesInstances()``方法通过``SpringFactoriesLoader#loadFactoryNames()``来获取一系列``Initializer``和``Listener``接口的实现类名, 然后再通过``BeanUtils#instantiateClass()``方法来实例化这些实现类. 
-
+``SpringApplication#getSpringFactoriesInstances()``方法通过调用``SpringFactoriesLoader#loadFactoryNames()``方法来获取``Initializer``和``Listener``接口的一系列实现类的类名, 然后再调用``BeanUtils#instantiateClass()``方法来实例化这些实现类. 
+``Initializer``和``Listener``的作用和加载等方面暂时不在这一节做介绍. 
 <br/>
 
-从``SpringApplication#getSpringFactoriesInstances()``到``SpringFactoriesLoader#loadFactoryNames()``的调用栈(下到上)为:
+从``SpringApplication#getSpringFactoriesInstances()``到``SpringFactoriesLoader#loadFactoryNames()``的调用栈(下调上)为:
 
 ```java
 loadFactoryNames(Class, ClassLoader):121, SpringFactoriesLoader
@@ -67,7 +65,15 @@ getSpringFactoriesInstances(Class):413, SpringApplication
 ```
 
 
-``SpringFactoriesLoader#loadFactoryNames()``的实现:
+``SpringFactoriesLoader#loadFactoryNames()``方法从``classpath:META/spring.factories``资源文件中获取接口实现类的配置信息.
+``spring.factories``实际上是一种properties文件, 保存着取值为接口和类的全限定名的key-val对, 表示某个类的哪些实现类需要加载.  例如: 
+```properties
+package1.MyInterface=package2.MyImplementClass1\
+    ,package2.MyImplementClass2\
+```
+
+``SpringFactoriesLoader#loadFactoryNames()``方法的实现如下
+
 ```java
 public static List<String> loadFactoryNames(Class<?> factoryClass, @Nullable ClassLoader classLoader) {
     String factoryClassName = factoryClass.getName();
@@ -87,10 +93,6 @@ private static Map<String, List<String>> loadSpringFactories(@Nullable ClassLoad
     try {
 
         // 检索所有类路径(各jar包)下的 META-INF/spring.factories
-        // 在 META-INF/spring.factories 中, 保存着形如
-        //     接口1=类1,类2,类3
-        // 这样的键值对.
-        // META-INF/spring.factories用于指定, 对于指定接口, 哪些实现类需要加载
         Enumeration<URL> urls = (classLoader != null ?
                 classLoader.getResources(FACTORIES_RESOURCE_LOCATION) :
                 ClassLoader.getSystemResources(FACTORIES_RESOURCE_LOCATION));
@@ -115,20 +117,76 @@ private static Map<String, List<String>> loadSpringFactories(@Nullable ClassLoad
     }
 }
 ```
-``SpringFactoriesLoader``及``META-INF/spring.factories``的功能与jdk的[SPI机制](https://www.jianshu.com/p/3a3edbcd8f24)相似, 都是通过配置文件来加载接口的特定实现类(而不是将这些类的实例化硬编码到java代码中), 但其配置方法与SPI机制相比更简洁. 一个``spring.factories``可以指定多个接口的需要实例化的实现类. 而jdk的SPI机制中, 每个接口需要单独的配置文件. 例如 JDBC Driver:
+``SpringFactoriesLoader`` + ``spring.factories``实现的功能与jdk的[SPI机制](https://www.jianshu.com/p/3a3edbcd8f24)相似, 都是通过配置文件来加载接口的特定实现类, 避免将一些组件类的实例化配置硬编码到java代码中. 
+``spring.factories``的配置方法与SPI机制相比更简洁, 一个``spring.factories``可以指定多种接口的实现类的配置, 而jdk的SPI机制中, 每个接口需要写成单独的配置文件. 例如 JDBC Driver:
 ```properties
 # ServiceLoader类固定地从 classpath:META-INF/services加载配置
-# 每个接口的实现类的配置, 都分别[以该接口全限定类名为文件名]的资源文件中
+# 每个接口的实现类的配置, 都分别定义在[以该接口全限定类名为文件名]的资源文件中
 
 # Mysql的JDBC Driver类 [mysql:mysql-connector-java:5.1.47]
-# - 资源路径: classpath:META-INF/services/java.sql.Driver
+# - 资源路径: mysql-connector-java-5.1.47.jar!\META-INF\services\java.sql.Driver
 com.mysql.jdbc.Driver
 com.mysql.fabric.jdbc.FabricMySQLDriver
 
 # Oracle的JDBC Driver类 [com.oracle:ojdbc6:11.2.0.3]
-# - 资源路径: classpath:META-INF/services/java.sql.Driver
+# - 资源路径: ojdbc6-11.2.0.3.jar!\META-INF\services\java.sql.Driver
 oracle.jdbc.OracleDriver
 
 ```
-但``spring.factories``的缺点也很明显 -- 使用SPI不需要引入任何依赖, 因为是jdk自带的功能, 而通过``spring.factories``实例化类需要引入Spring的依赖, *在开发非Spring应用的SDK时引入额外的依赖会使SDK的配置更复杂*.
+然而, ``spring.factories``的缺点也很明显 -- SPI作为jdk自带的功能, 在使用时不需要引入任何依赖, 而通过``spring.factories``实例化类需要引入Spring的依赖, *在开发非Spring应用的SDK时引入额外的依赖会使SDK的配置更复杂*.
 
+# 2. 运行SpringApplication
+
+```java
+public ConfigurableApplicationContext run(String... args) {
+
+    // 计时开始 - StopWatch是一个简单的计时器
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start(); 
+
+    ConfigurableApplicationContext context = null;
+    Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
+
+    // 无头模式(java.awt.headless) - 表示缺少显示设备等. 与图形渲染等功能.
+    // spring boot应用通常通过命令行运行(无图形界面), 因此默认打开
+    configureHeadlessProperty();
+
+    // 该类保存了多个SpringApplicationRunListener实现类的集合, 用于执行多个*Listener
+    // 具体的实现类通过SpringFactoriesLoader加载
+    SpringApplicationRunListeners listeners = getRunListeners(args);
+    listeners.starting();
+    try {
+        ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
+        ConfigurableEnvironment environment = prepareEnvironment(listeners, applicationArguments);
+        configureIgnoreBeanInfo(environment);
+        Banner printedBanner = printBanner(environment);
+        context = createApplicationContext();
+        exceptionReporters = getSpringFactoriesInstances(SpringBootExceptionReporter.class,
+                new Class[] { ConfigurableApplicationContext.class }, context);
+        prepareContext(context, environment, listeners, applicationArguments, printedBanner);
+        refreshContext(context);
+        afterRefresh(context, applicationArguments);
+
+        
+        stopWatch.stop();
+        if (this.logStartupInfo) {
+            new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), stopWatch);
+        }
+        listeners.started(context);
+        callRunners(context, applicationArguments);
+    }
+    catch (Throwable ex) {
+        handleRunFailure(context, ex, exceptionReporters, listeners);
+        throw new IllegalStateException(ex);
+    }
+
+    try {
+        listeners.running(context);
+    }
+    catch (Throwable ex) {
+        handleRunFailure(context, ex, exceptionReporters, null);
+        throw new IllegalStateException(ex);
+    }
+    return context;
+}
+```
