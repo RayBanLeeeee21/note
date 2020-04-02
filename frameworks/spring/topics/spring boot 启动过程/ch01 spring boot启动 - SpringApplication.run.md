@@ -50,7 +50,8 @@ static WebApplicationType deduceFromClasspath() {
 
 ### 1.2 通过SpringFactoriesLoader配置Initializer和Listener实现类
 
-``SpringApplication#getSpringFactoriesInstances()``方法通过调用``SpringFactoriesLoader#loadFactoryNames()``方法来获取``Initializer``和``Listener``接口的一系列实现类的类名, 然后再调用``BeanUtils#instantiateClass()``方法来实例化这些实现类. 
+``SpringApplication#getSpringFactoriesInstances()``方法通过调用``SpringFactoriesLoader#loadFactoryNames()``方法, 
+获取``Initializer``和``Listener``接口的一系列实现类的类名, 然后再调用``BeanUtils#instantiateClass()``方法来实例化这些实现类. 
 ``Initializer``和``Listener``的作用和加载等方面暂时不在这一节做介绍. 
 <br/>
 
@@ -135,39 +136,63 @@ oracle.jdbc.OracleDriver
 ```
 然而, ``spring.factories``的缺点也很明显 -- SPI作为jdk自带的功能, 在使用时不需要引入任何依赖, 而通过``spring.factories``实例化类需要引入Spring的依赖, *在开发非Spring应用的SDK时引入额外的依赖会使SDK的配置更复杂*.
 
-# 2. 运行SpringApplication
+<br/>
 
+``SpringFactoriesLoader`` + ``spring.factories``是比较常用的配置bean的方法, 也是实现Spring的AutoConfiguration机制的其中一个基础功能. 
+
+## 2. 运行SpringApplication
+
+调用``SpringApplication#run()``方法启动Spring应用时, 主要完成配置加载和bean加载等工作. 
+整个启动过程非常复杂, 但并非毫无规律可言, 大多数的工作都在``SpringApplicationRunListener``, ``Environment``和``ApplicationContext``这几个接口的实现类中完成, 而设计模式 (工厂模式, 监听器模式等) 的作用和思想在其中体现得淋漓尽致. 这些接口可以说是整个Spring体系的基石.
+
+<br/>
+
+``SpringApplication#run()``的流程如下:
 ```java
 public ConfigurableApplicationContext run(String... args) {
 
-    // 计时开始 - StopWatch是一个简单的计时器
-    StopWatch stopWatch = new StopWatch();
+    // 
+    StopWatch stopWatch = new StopWatch(); // 计时开始 - StopWatch是一个简单的计时器
     stopWatch.start(); 
 
     ConfigurableApplicationContext context = null;
     Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
 
-    // 无头模式(java.awt.headless) - 表示缺少显示设备等. 与图形渲染等功能.
-    // spring boot应用通常通过命令行运行(无图形界面), 因此默认打开
+    /**
+    * 将java.awt.headless设置到system properties
+    * - 无头模式(java.awt.headless) - 表示缺少显示设备等. 与图形渲染等功能的底层实现相关.
+    * - spring boot应用通常通过命令行运行(无图形界面), 因此默认打开(true).
+    */
     configureHeadlessProperty();
 
-    // 该类保存了多个SpringApplicationRunListener实现类的集合, 用于执行多个*Listener
-    // 具体的实现类通过SpringFactoriesLoader加载
+    /**
+    * 2.1 初始化SpringApplicationRunListener(s)
+    * SpringApplicationRunListener[s] 实际上是多个SpringApplicationRunListener的集合, 用于遍历执行这些Listener
+    * 而Listener的实现类通过SpringFactoriesLoader加载.
+    */
     SpringApplicationRunListeners listeners = getRunListeners(args);
     listeners.starting();
     try {
-        ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
+        ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);  // 命令行args的包装类
+
+        /**
+        * 2.2 根据Web类型, 实例化对应的Environment类型, 并做些准备工作
+        */
         ConfigurableEnvironment environment = prepareEnvironment(listeners, applicationArguments);
-        configureIgnoreBeanInfo(environment);
-        Banner printedBanner = printBanner(environment);
-        context = createApplicationContext();
+        configureIgnoreBeanInfo(environment); // 将spring.beaninfo.ignore设置到system property和Environment
+        Banner printedBanner = printBanner(environment); // 打印logo
+
+        /**
+        * 2.3 根据Web类型, 实例化对应的ApplicationEnvironment类型, 并做些准备工作
+        */
+        context = createApplicationContext();   
         exceptionReporters = getSpringFactoriesInstances(SpringBootExceptionReporter.class,
                 new Class[] { ConfigurableApplicationContext.class }, context);
         prepareContext(context, environment, listeners, applicationArguments, printedBanner);
-        refreshContext(context);
-        afterRefresh(context, applicationArguments);
+        refreshContext(context);                      // 刷新ApplicationContext(加载bean等)
+        afterRefresh(context, applicationArguments);  // hook方法, 默认为空
 
-        
+        // 一些启动后的处理
         stopWatch.stop();
         if (this.logStartupInfo) {
             new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), stopWatch);
@@ -190,3 +215,7 @@ public ConfigurableApplicationContext run(String... args) {
     return context;
 }
 ```
+[``SpringApplicationRunListener``](./ch02%20SpringApplicationRunListener.md), [``Environment``](./ch02%20Environment.md), [``ApplicationContext``](./ch03%20ApplicationContext.md)的概念比较重要, 而且实例化和准备过程都比较复杂, 因此分别在分别的章节进行介绍.
+
+
+扩展知识: SPI, SpringFactoriesLoader
