@@ -142,8 +142,22 @@ oracle.jdbc.OracleDriver
 
 ## 2. 运行SpringApplication
 
-调用``SpringApplication#run()``方法启动Spring应用时, 主要完成配置加载和bean加载等工作. 
-整个启动过程非常复杂, 但并非毫无规律可言, 大多数的工作都在``SpringApplicationRunListener``, ``Environment``和``ApplicationContext``这几个接口的实现类中完成, 而设计模式 (工厂模式, 监听器模式等) 的作用和思想在其中体现得淋漓尽致. 这些接口可以说是整个Spring体系的基石.
+调用``SpringApplication#run()``方法启动Spring应用时, 主要完成配置加载和bean加载等准备工作, 大致可以分为以下几个方面:
+* ``SpringApplicationRunListener``的实例化和通知: 
+  * 顾名思义, 该监听器是针对``SpringApplication#run()``方法设计的, 其监听方法会在Spring boot应用启动过程的几个关键时间节点被调用. 
+  * 监听器实现类是通过``SpringFactoriesLoader``进行加载和实例化的.
+  * 监听器实例的管理用到了设计模式中的[**组合模式**](http://c.biancheng.net/view/1373.html), 定义了一个``SpringApplicationRunListener[s]``类作为监听器的集合, 串行地执行各监听器的监听方法.
+* ``Environment``的实例化与准备: 
+  * ``Environment``是原生Spring框架中定义的一个核心的API, 负责加载和管理Spring应用的**profile**, **配置属性**及其**属性源**.
+  * bean可以通过显式调用``Environment``的方法访问profile和配置, 也可以通过``@Value``等注解自动地注入属性.
+  * 实际实例化的``Environment``类型与Spring boot应用的Web类型相关.
+* ``ApplicationContext``的实例化与准备: 
+  * ``ApplicationContext``是原生Spring框架中定义的一个核心的API, 负责加载和管理应用的组件bean.
+  * bean可以通过显式调用``ApplicationContext``的方法获取到其它依赖的bean, 也可以通过``@Autowire``等注解自动地注入依赖.
+* 基础配置: 无头模式配置, beanInfo等
+  * 无头模式(java.awt.headless): 表示缺少显示设备等. 与图形渲染等功能的底层实现相关. 
+    * 该属性的配置之所以要放到``run``方法的最前面, 是因为这是一项**与硬件能力下限相关**的配置. 如果一些组件(如Listener或者bean)的初始化中, 执行了``java.awt.headless=false``条件下无法执行的方法, 可能会造成一些错误.
+* 其它方面: 计时器``StopWatch``, 启动日志``StartupInfoLogger``, 异常报告类``SpringBootExceptionReporter``等.
 
 <br/>
 
@@ -192,7 +206,7 @@ public ConfigurableApplicationContext run(String... args) {
         refreshContext(context);                      // 刷新ApplicationContext(加载bean等)
         afterRefresh(context, applicationArguments);  // hook方法, 默认为空
 
-        // 一些启动后的处理
+        // 启动后的其它处理
         stopWatch.stop();
         if (this.logStartupInfo) {
             new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), stopWatch);
@@ -215,7 +229,7 @@ public ConfigurableApplicationContext run(String... args) {
     return context;
 }
 ```
-[``SpringApplicationRunListener``](./ch02%20SpringApplicationRunListener.md), [``Environment``](./ch02%20Environment.md), [``ApplicationContext``](./ch03%20ApplicationContext.md)的概念比较重要, 而且实例化和准备过程都比较复杂, 因此分别在分别的章节进行介绍.
+[``SpringApplicationRunListener``](./ch02%20SpringApplicationRunListener.md), [``Environment``](./ch02%20Environment.md), [``ApplicationContext``](./ch03%20ApplicationContext.md)的概念比较重要, 并且其实例化和准备过程都比较复杂, 因此分别在单独的章节对这些API进行介绍.
 
 
 扩展知识: SPI, SpringFactoriesLoader
