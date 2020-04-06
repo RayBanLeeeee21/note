@@ -1,0 +1,38 @@
+@startuml environment
+interface PropertyResolver {
++ 访问property()
++ 解析placeHolder()
+}
+interface Environment extends PropertyResolver{
++ 访问profile()
++ 运行时判断profile是否起作用()
+}
+interface ConfigurablePropertyResolver extends PropertyResolver {
+配置: placeHolder相关
+配置: 解析出错后的处理(原封不动返回还是抛异常)
+--
++ 设置和验证必需的property()
+} 
+interface ConfigurableEnvironment extends Environment, ConfigurablePropertyResolver {
+配置: activate profile 和 default profile
+--
++ 访问配置源()
++ 访问JVM参数property()
++ 访问环境变量property()
++ 与父Environment合并()
+}
+
+class ConversionService{
+..字符串格式转换等方法..
+}
+class MutablePropertySources
+abstract class AbstractEnvironment
+class StandardEnvironment
+class PropertySource
+
+ConfigurablePropertyResolver o-left- ConversionService
+ConfigurableEnvironment "1" *-left- "1" MutablePropertySources
+ConfigurableEnvironment <|-right- AbstractEnvironment
+AbstractEnvironment <|-right- StandardEnvironment
+MutablePropertySources o-up-"0..N" PropertySource
+@enduml

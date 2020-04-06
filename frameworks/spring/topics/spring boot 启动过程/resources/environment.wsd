@@ -1,0 +1,67 @@
+@startuml environment
+interface PropertyResolver {
+..property访问..
+	+ boolean containsProperty(String key);
+	+ String getProperty(String key);
+	+ String getProperty(String key, String defaultValue);
+	+ <T> T getProperty(String key, Class<T> targetType);
+	+ <T> T getProperty(String key, Class<T> targetType, T defaultValue);
+	+ String getRequiredProperty(String key) throws IllegalStateException;
+	+ <T> T getRequiredProperty(String key, Class<T> targetType) 
+		\t throws IllegalStateException;
+..解析placeHolder..
+	+ String resolvePlaceholders(String text);
+	+ String resolveRequiredPlaceholders(String text) throws IllegalArgumentException;
+}
+interface Environment extends PropertyResolver{
+..访问profile..
+	+ String[] getActiveProfiles();
+	+ String[] getDefaultProfiles();
+..运行时判断profile是否起作用..
+	+ boolean acceptsProfiles(String... profiles);
+	+ boolean acceptsProfiles(Profiles profiles);
+}
+interface ConfigurablePropertyResolver extends PropertyResolver {
+..可配置(Configurable)方法..
+	+ void setConversionService(ConfigurableConversionService conversionService);
+	+ void setPlaceholderPrefix(String placeholderPrefix);	// 前缀, 如"${aaa:1}"中的"${"
+	+ void setPlaceholderSuffix(String placeholderSuffix);	// 后缀, 如"${aaa:1}"中的"}"
+	+ void setValueSeparator(@Nullable String valueSeparator);// 分隔符, 如"${aaa:1}"中的":"
+	//解析出错后的处理(原封不动返回还是抛异常)
+	+ void setIgnoreUnresolvableNestedPlaceholders(
+		\t boolean ignoreUnresolvableNestedPlaceholders
+	);
+..设置和验证必需的property..
+	+ void setRequiredProperties(String... requiredProperties);
+	+ void validateRequiredProperties() throws MissingRequiredPropertiesException;
+} 
+interface ConfigurableEnvironment extends Environment, ConfigurablePropertyResolver {
+..可配置(Configurable)方法..
+	+ void setActiveProfiles(String... profiles);
+	+ void addActiveProfile(String profile);
+	+ void setDefaultProfiles(String... profiles);
+..访问配置源..
+	+ MutablePropertySources getPropertySources();
+..JVM参数property..
+	+ Map<String, Object> getSystemProperties();
+..环境变量property..
+	+ Map<String, Object> getSystemEnvironment();
+..与父Environment合并..
+// 继承并覆盖父的active profile, default profile, 配置源
+	+ void merge(ConfigurableEnvironment parent);
+}
+
+class ConversionService{
+..字符串格式转换等方法..
+}
+class MutablePropertySources
+abstract class AbstractEnvironment
+class StandardEnvironment
+class PropertySource
+
+ConfigurablePropertyResolver o-left- ConversionService
+ConfigurableEnvironment "1" *-left- "1" MutablePropertySources
+ConfigurableEnvironment <|-right- AbstractEnvironment
+AbstractEnvironment <|-right- StandardEnvironment
+MutablePropertySources o-up-"0..N" PropertySource
+@enduml
