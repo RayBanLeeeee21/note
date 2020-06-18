@@ -1,5 +1,11 @@
 # Chapter 02 Environment
 
+本章主要介绍``Environment``的实现原理及其设计思想. 笔者认为, 在面对Spring这样的大型项目时, 我们不应该带着**面向过程**的思维, 跟着调试器光标的走向去了解Spring做了什么工作, 这样容易被错综复杂的对象关系和频繁的方法跳转打乱思路. 在了解某个复杂的过程时, 应该: 
+1. 先找出该过程涉及到的对象/接口; 
+2. 了解对象/接口各自的职责范围; 
+3. 了解对象之间的依赖关系;
+4. 结合对象关系, 了解过程如何通过对象的协作实现.
+
 ## 2.1 Environment相关API
 
 在了解``Environment``实现类的原理之前, 需要一些与``Environment``相关的API的先验知识, 了解``Environment``提供了什么功能, 在Spring中起到了怎样的作用.
@@ -7,7 +13,7 @@
 下图以``StandardEnvironment``类为例, 列出了``StandardEnvironment``所有父类/接口的主要方法.
 <img src="./resources/environment.svg" style="width: 100%"/>
 
-由于涉及的方法比较多, 看起来比较繁杂, 笔者将各接口方法按功能进行分类和简化, 得到简化后的"**伪**"类图. 如果想要了解Spring官方对于这些接口的规范以及其它细节, 读者应该直接参考Spring的源代码. 此处只是对接口各自的职责范围和依赖关系做一些梳理.
+由于涉及的方法比较多, 看起来比较繁杂, 笔者将各接口方法按功能进行分类和简化, 得到简化后的"**伪**"类图. 如果想要了解Spring官方对于这些接口的规范以及其它细节, 读者应该直接参考这些接口源码的注释. 此处只是对接口各自的职责范围和依赖关系做一些梳理.
 ![](./resources/environment-sim.svg)
 
 
@@ -32,7 +38,7 @@ private ConfigurableEnvironment getOrCreateEnvironment() {
 }
 ```
 其中``StandardServletEnvironment``的``StandardReactiveWebEnvironment``都继承自``StandardEnvironment``, 而``StandardEnvironment``继承自``AbstractEnvironment``. 
-``StandaredEnvironment``中的大部分接口方法都在其父类``AbstractEnvironment``中实现, 因此本小节的重点放在``AbstractEnvironment``的源代码上.
+``StandaredEnvironment``中的大部分接口方法都在其父类``AbstractEnvironment``中实现, *因此本小节的重点放在``AbstractEnvironment``的源代码上*.
 
 <br/>
 
@@ -85,15 +91,6 @@ protected void customizePropertySources(MutablePropertySources propertySources) 
 >         super.customizePropertySources(propertySources); // no-op from base class
 >         propertySources.addLast(new PropertySourceA(...));
 >         propertySources.addLast(new PropertySourceB(...));
->     }
-> }
-> 
-> public class Level2Environment extends Level1Environment {
->     @Override
->     protected void customizePropertySources(MutablePropertySources propertySources) {
->         super.customizePropertySources(propertySources); // add all from superclass
->         propertySources.addLast(new PropertySourceC(...));
->         propertySources.addLast(new PropertySourceD(...));
 >     }
 > }
 > public class Level2Environment extends Level1Environment {

@@ -12,7 +12,7 @@ public SpringApplication(ResourceLoader resourceLoader, Class<?>... primarySourc
     // 1.1 推断web类型
     this.webApplicationType = WebApplicationType.deduceFromClasspath();
 
-    // 1.2 加载Initializer和Listener - SpringFctoriesLoader提供类名, 再实例化
+    // 1.2 加载Initializer和Listener - SpringFactoriesLoader提供类名, 再实例化
     setInitializers((Collection) getSpringFactoriesInstances(ApplicationContextInitializer.class));
     setListeners((Collection) getSpringFactoriesInstances(ApplicationListener.class));
 
