@@ -240,8 +240,235 @@ Channel
     
     ```
 
-#### SelectableChannel - 可用于选择器的通道
+#### SelectableChannel系列 - 可通过选择器进行多路复用的通道
 
-类头注释:
-* 通过``register()``方法将自己注册到选择器, 并返回一个关联自己与选择器的``SelectionKey``
-* 通过调用``deregister()``注销, 注销的时候, 选择器会回收所有它分配给通道的资源
+类头注释: 该通道可通过选择器进行多路复用
+* **该通道是线程安全的**
+* **注册**: 通过``register()``方法将自己注册到选择器, 并返回一个关联自己与选择器的``SelectionKey``
+    * 将通道注册到某个特定的选择器上只能注册一次
+* **注销**: 通过调用``deregister()``注销, 注销的时候, 选择器会回收所有它分配给通道的资源
+    * 通道不能直接注销, 在注销之前, 代表注册关系的key要先cancel; key被cancel后, 选择器进行下一次选择操作时, 会注解通道
+    * key可以被显式调用cancel
+    * 关闭通道也可以将所有关联的key都cancel掉, 不管是显式调用close()还是被中断
+    * 关闭选择器会使所有关联的通道都注销, 并且使所有关联的key失效
+* 阻塞模式: 该通道支持非阻塞模式
+    * 通道初始化阻塞模式
+    * 如果用于选择器, 则一定要设置成非阻塞
+
+``SelectableChannel``行为:
+```java
+    /** 返回创建该通道的provider */
+    public abstract SelectorProvider provider();
+
+    /** 支持的操作. */
+    public abstract int validOps();
+
+    /** 是否注册
+        - 由于key的cancel与注销过程之间可能有时延, 在对key进行cancel后
+          可能在key.cancel()/channel.close()以后, 还能观察到未注销       */
+    public abstract boolean isRegistered(); 
+    
+    /** 返回最后一次注册到sel时(如果有注册多次的话), 产生的key 
+        - 也可能是null, 如果没注册过 */
+    public abstract SelectionKey keyFor(Selector sel);
+
+    /** 注册
+        - 返回值SelectionKey是注册成功的标志
+        - 如果一次selection正在进行中, 该方法被调用, 则key对应的channel不会对该selection作出反应. 新的注册或者对key.ops的改变会在下次selection时才能观察到.
+        - 如果configureBlocking()方法正在执行中, 该方法被调用, 则该方法也会被阻塞, 直到阻塞模式被调整完成
+        - 如果该方法执行的时候, 通道被关闭, 则返回的key是失效的      */
+    public abstract SelectionKey register(Selector sel, int ops, Object att)
+        throws ClosedChannelException;
+
+    /** 相当于执行 register(sel, ops, null) */
+    public final SelectionKey register(Selector sel, int ops)
+        throws ClosedChannelException;
+
+    /** 是否阻塞
+        - 通道关闭后, 返回值是未定义的    */
+    public abstract boolean isBlocking();
+
+    /** 
+        - 如果通道是被注册过的, 将通道改成阻塞模式会抛IllegalBlockingModeException
+        - 对阻塞模式的调整, 只影响模式被改变以后的IO操作
+        - 该方法可能会被正在进行的IO操作阻塞, 该现象与具体实现有关
+        - 该方法与其本身互斥, 也与register()方法互斥 
+    */
+    public abstract SelectableChannel configureBlocking(boolean block)
+        throws IOException;
+
+    /** register()方法与configureBlocking()方法同步的对象    */
+    public abstract Object blockingLock();
+```
+
+抽象模板类``AbstractSelectableChannel``: 这一层主要负责实现**key的管理**, **注册**和**阻塞模式配置**
+* 属性
+    ```java
+        // 产生通道的provider
+        private final SelectorProvider provider;
+
+        // key相关
+        private final Object keyLock = new Object();    // 设置key的锁
+        private SelectionKey[] keys;                    // 关联的key
+        private int keyCount = 0;
+
+        // 注册相关
+        private final Object regLock = new Object();    // 用于注册的锁
+        private volatile boolean nonBlocking;           // 是否非阻塞
+    ```
+* 对key进行增删查: key直接放在keys表(数组)中, 新增的时候加到后面, 检索和删除的时候则按顺序找
+    ```java
+    private void addKey(SelectionKey k) {
+        // 检查是否持有 keyLock
+        assert Thread.holdsLock(keyLock);
+
+        int i = 0;
+
+        // 容量足够, 则从keys表第0个开始往上找, 直到找到第一个可用的slot
+        if ((keys != null) && (keyCount < keys.length)) {
+            
+            for (i = 0; i < keys.length; i++)
+                if (keys[i] == null)
+                    break;
+        // 未创建keys表, 则创建keys表
+        } else if (keys == null) {
+            keys = new SelectionKey[2];
+        // 扩容, 
+        } else {
+            // Grow key array
+            int n = keys.length * 2;
+            SelectionKey[] ks =  new SelectionKey[n];
+            for (i = 0; i < keys.length; i++)
+                ks[i] = keys[i];
+            keys = ks;
+            i = keyCount;
+        }
+        keys[i] = k;
+        keyCount++;
+    }
+
+    private SelectionKey findKey(Selector sel) {
+        // 检查是否持有锁
+        assert Thread.holdsLock(keyLock);
+        if (keys == null)
+            return null;
+        
+        // 按顺序找
+        for (int i = 0; i < keys.length; i++)
+            if ((keys[i] != null) && (keys[i].selector() == sel))
+                return keys[i];
+        return null;
+    }
+
+    void removeKey(SelectionKey k) {                    // package-private
+        synchronized (keyLock) {
+            // 按顺序找, 找到后删除
+            for (int i = 0; i < keys.length; i++)
+                if (keys[i] == k) {
+                    keys[i] = null;
+                    keyCount--;
+                }
+            ((AbstractSelectionKey)k).invalidate();
+        }
+    }
+
+    ```
+* 注册key:
+    ```java
+    public final SelectionKey register(Selector sel, int ops, Object att) throws ClosedChannelException {
+
+        // 检查操作是否合法
+        if ((ops & ~validOps()) != 0)
+            throw new IllegalArgumentException();
+
+        // 检查通道是否关闭
+        if (!isOpen())
+            throw new ClosedChannelException();
+        
+        synchronized (regLock) {
+
+            // 检查是否为非阻塞模式
+                // 该检查必须放在 synchronized块中, 否则可能判断完条件就变了
+                // 该方法本身不带锁
+            if (isBlocking())
+                throw new IllegalBlockingModeException();
+            synchronized (keyLock) {
+                
+                // 重检查: 结果可能会跟上一次检查不一样
+                if (!isOpen())
+                    throw new ClosedChannelException();
+
+                // 如果key已存在(已注册), 则更新key
+                SelectionKey k = findKey(sel);
+                if (k != null) {
+                    k.attach(att);
+                    k.interestOps(ops);
+
+                } 
+                // 否则将自己注册到选择器上, 并生成一个新的key, 加到keys表中
+                else {
+                    k = ((AbstractSelector)sel).register(this, ops, att);
+                    addKey(k);
+                }
+                return k;
+            }
+        }
+    }
+    ```
+* 关闭通道: 关闭完通道后, 要使所有key都失效
+    ```java
+    protected final void implCloseChannel() throws IOException {
+        // 具体操作
+        implCloseSelectableChannel();
+
+        // clone keys to avoid calling cancel when holding keyLock
+        SelectionKey[] copyOfKeys = null;
+        synchronized (keyLock) {
+            if (keys != null) {
+                copyOfKeys = keys.clone();
+            }
+        }
+
+        // 使所有key失效
+            // key.cancel()是幂等操作
+        if (copyOfKeys != null) {
+            for (SelectionKey k : copyOfKeys) {
+                if (k != null) {    // 有可能刚好被remove(), 因此要检查
+                    k.cancel();   // invalidate and adds key to cancelledKey set
+                }
+            }
+        }
+    }
+    ```
+* 配置阻塞模式
+    ```java
+    public final SelectableChannel configureBlocking(boolean block)
+        throws IOException {
+        // 先上锁, 防止与register()方法发生冲突
+        synchronized (regLock) {
+
+            // 检查通道是否已经关闭
+            if (!isOpen())
+                throw new ClosedChannelException();
+
+            // 只有阻塞模式发生变化才操作
+            boolean blocking = !nonBlocking;
+            if (block != blocking) {
+                // 如果有可用的key (即存在关联的selector), 则抛异常
+                if (block && haveValidKeys())
+                    throw new IllegalBlockingModeException();
+                
+                // 具体操作
+                implConfigureBlocking(block);
+
+                // 更新
+                nonBlocking = !block;
+            }
+        }
+        return this;
+    }
+    ```
+
+#### SocketChannel系列
+
+#### ServerSocketChannel系列
