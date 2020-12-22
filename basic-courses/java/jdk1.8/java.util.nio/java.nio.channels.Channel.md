@@ -471,4 +471,27 @@ Channel
 
 #### SocketChannel系列
 
+头注释:
+* 不能基于一个已存在的socket创建一个SocketChannel
+* 该channel通过open()来创建, 但调用完还没连接, 此时进行IO操作会抛出``NotYetConnectedException``
+* 非阻塞连接:
+    * 通过``connect()``方法开始连接
+    * 调用``finishConnect()``表示连接完成
+    * 通过``isConnectionPending()``方法判断是不是正在进行连接操作
+    * 通过``isConnected()``方法判断是否已经连接过
+* 异步shutdown(Input或Output)
+    * ``shutdownInput()``: 一个线程正在阻塞读时, 另一个线程shutdown, 读线程会读到-1
+    * ``shutdownOutput()``: 一个线程正在阻塞写时, 另一个线程shudown, 写线程会抛出``AsynchronousCloseException``.
+* Socket选项: SocketChannel支持一些Socket选项 (参考``java.net.StandardSocketOptions``):
+    * **SO_SNDBUF**: 发送缓冲区大小
+    * **SO_RCVBUF**: 接收缓冲区大小
+    * **SO_KEEPALIVE**: 是否开keep-alive选项(boolean)
+    * **SO_REUSEADDR**: 是否重用地址
+    * **SO_LINGER**: <TODO desc="详细了解">
+    * **TCP_NODELAY**: 禁用Nagle算法, 不延迟等待数据到达写缓存区, 直接送走
+* SocketChannel是线程安全的, 支持多个线程同时调用IO, 但一次只有一个线程在进行读或写.
+* ``connect()``方法和``finishConnect()``方法有竞争的关系, 而这些操作在进行时, 如果有其它线程执行IO, 则读写的方法会阻塞到这些操作完成.
+
+<br/>
+
 #### ServerSocketChannel系列
