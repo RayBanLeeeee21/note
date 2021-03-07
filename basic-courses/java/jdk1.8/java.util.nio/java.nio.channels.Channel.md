@@ -309,7 +309,7 @@ Channel
 
         // key相关
         private final Object keyLock = new Object();    // 设置key的锁
-        private SelectionKey[] keys;                    // 关联的key
+        private SelectionKey[] keys;                    // 关联的key. 每个key表示一对channel-selector关联
         private int keyCount = 0;
 
         // 注册相关
@@ -333,7 +333,7 @@ Channel
         // 未创建keys表, 则创建keys表
         } else if (keys == null) {
             keys = new SelectionKey[2];
-        // 扩容, 
+        // 扩容, 增大到两倍
         } else {
             // Grow key array
             int n = keys.length * 2;
@@ -385,6 +385,7 @@ Channel
         if (!isOpen())
             throw new ClosedChannelException();
         
+        // 注册锁
         synchronized (regLock) {
 
             // 检查是否为非阻塞模式
@@ -403,7 +404,6 @@ Channel
                 if (k != null) {
                     k.attach(att);
                     k.interestOps(ops);
-
                 } 
                 // 否则将自己注册到选择器上, 并生成一个新的key, 加到keys表中
                 else {
@@ -418,7 +418,7 @@ Channel
 * 关闭通道: 关闭完通道后, 要使所有key都失效
     ```java
     protected final void implCloseChannel() throws IOException {
-        // 具体操作
+        // 具体操作：由子类决定
         implCloseSelectableChannel();
 
         // clone keys to avoid calling cancel when holding keyLock
@@ -455,10 +455,11 @@ Channel
             boolean blocking = !nonBlocking;
             if (block != blocking) {
                 // 如果有可用的key (即存在关联的selector), 则抛异常
+                    // 不管是阻塞变非阻塞, 还是非阻塞变成阻塞, 都一定是有问题的
                 if (block && haveValidKeys())
                     throw new IllegalBlockingModeException();
                 
-                // 具体操作
+                // 具体操作：由子类决定
                 implConfigureBlocking(block);
 
                 // 更新
@@ -471,7 +472,7 @@ Channel
 
 #### SocketChannel系列
 
-头注释:
+``SocketChannel``头注释:
 * 不能基于一个已存在的socket创建一个SocketChannel
 * 该channel通过open()来创建, 但调用完还没连接, 此时进行IO操作会抛出``NotYetConnectedException``
 * 非阻塞连接:
@@ -493,5 +494,35 @@ Channel
 * ``connect()``方法和``finishConnect()``方法有竞争的关系, 而这些操作在进行时, 如果有其它线程执行IO, 则读写的方法会阻塞到这些操作完成.
 
 <br/>
+
+
+``SocketChannel``方法:
+*   ```java
+    SocketChannel bind(SocketAddress local) throws IOException;
+    SocketChannel shutdownInput() throws IOException;
+    SocketChannel shutdownOutput() throws IOException;
+    Socket socket();
+    boolean isConnected(); 
+    boolean isConnectionPending(); 
+    boolean connect(SocketAddress remote) throws IOException;
+    boolean finishConnect() throws IOException;
+    SocketAddress getRemoteAddress() throws IOException;
+    ```
+
+``SocketChannelImpl`` (from ``sun.nio.ch.*``)
+* 成员
+    ```java
+    static NativeDispatcher nd;     // 文件描述符读写原语实现类
+    ```
+* 属性:
+    ```java
+
+    FileDescriptor fd;              // 文件描述符
+    int fdVal;                      // 文件描述符
+
+    ReentrantLock readLock;         // 读锁
+    ReentrantLock writeLock;        // 写锁
+    
+    ```
 
 #### ServerSocketChannel系列
