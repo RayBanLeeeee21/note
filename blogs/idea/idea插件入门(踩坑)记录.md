@@ -327,5 +327,6 @@ IDEA除了普通的DevKit项目模块, 也提供了由Gradle管理的IDEA插件�
 <br/>
 
 解决该问题有几个办法:
-1. 创建完gradle
+1. 通过"科学上网"等手段加快下载速度, 然后接受使用IDEA强推的gradle版本.
+2. 在创建完gradle项目后, 强制停止加载过程, 然后打开设置("Ctrl+Alt+S")找到Gradle, 将Use
 1. 在创建完gradle项目后, 停止该加载过程, 然后修改``<module>/gradle/gradle-wrapper.properties``中的url, 将gradle版本改成自己所用的版本, 如``.../gradle-6.7-bin.zip``改成``.../gradle-6.8.1.zip``
