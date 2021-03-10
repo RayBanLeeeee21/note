@@ -31,7 +31,8 @@
 - **actions**: Action表示由IDEA用户进行某个操作时产生的一个动作. 从插件开发者的角度来看, Action就是插件程序的入口, 类似于Controller. 
 
 填充完"hello-world-plg"一些基本信息后得到
-- * ![plugin.xml](./resources/plugin.xml.png)
+- ![plugin.xml](./resources/plugin.xml.png)
+- ``plugin.xml``的详细用法可以参考官方文档[Plugin Configuration File - plugin.xml](plugin-configuration-file)
 
 ### 1.3 编译和调试
 
@@ -282,7 +283,7 @@ IDEA是一个很强大的IDE, 而这归功于IDEA中各种强大的插件功能.
 <br/>
 
 对于该报错, 笔者在百度上找了很久都没找到, 最后在[IDEA官方文档](https://plugins.jetbrains.com/docs/intellij/welcome.html)的[Part I / Plugin Structure / Plugin Dependencies](https://plugins.jetbrains.com/docs/intellij/plugin-dependencies.html#project-setup)下找到了解决方案:
-- ![引入jar包-官方文档](./resources/引入jar包-官方文档.PNG)   
+- ![引入jar包-官方文档](./resources/引入jar包-官方文档.png)   
 - 翻译过来就是:
     - 不能将插件jar包作为lib加入到类路径, 因为Intellij平台会加载两次.
     - **应该将插件jar包加入到SDK中**
@@ -308,6 +309,9 @@ IDEA除了普通的DevKit项目模块, 也提供了由Gradle管理的IDEA插件�
 2. 设置项目名, groupId, artifactId等基本信息, 点Finish.
     - ![设置Gradle项目基本信息](./resources/设置Gradle项目基本信息.png)
 
+<br/>
+**对于没有Gradle使用经验的开发者来说, 开发IDEA插件时, 一大半的坑都在Gradle上.**
+
 #### 2.2.2 踩坑记录 - IDEA的Gradle插件
 
 经常用IDEA中开发maven项目的开发者应该知道, IDEA中是可以配置maven的一些全局配置(即与特定项目无关的配置), 包括maven根目录, settings.xml, 仓库目录等, 可以在新建或者导入项目之前选择maven的版本. 
@@ -328,5 +332,56 @@ IDEA除了普通的DevKit项目模块, 也提供了由Gradle管理的IDEA插件�
 
 解决该问题有几个办法:
 1. 通过"科学上网"等手段加快下载速度, 然后接受使用IDEA强推的gradle版本.
-2. 在创建完gradle项目后, 强制停止加载过程, 然后打开设置("Ctrl+Alt+S")找到Gradle, 将Use
-1. 在创建完gradle项目后, 停止该加载过程, 然后修改``<module>/gradle/gradle-wrapper.properties``中的url, 将gradle版本改成自己所用的版本, 如``.../gradle-6.7-bin.zip``改成``.../gradle-6.8.1.zip``
+    - 可以修改``<module>/gradle/gradle-wrapper.properties``中的url, 将gradle版本改成自己指定的版本, 如``.../gradle-6.7-bin.zip``改成``.../gradle-6.8.1.zip``
+2. 在创建完gradle项目后, 强制停止加载过程, 然后打开设置("Ctrl+Alt+S")找到Gradle, 将"Use Gradle from"改成"Specified location", 使用自定义的Gradle.
+    - ![Gradle配置](./resources/gradle配置.png)
+
+#### 2.2.3 开发IDEA插件时的Gradle配置
+
+[2.2.1小节](#221-创建gradle管理的idea插件开发项目)中创建的Gradle项目中, 生成了``build.gradle``, 其中对于插件开发SDK和IDEA插件依赖的管理可以在``build.gradle``上进行配置:
+- ![build.gradle](./resources/build.gradle.png)
+- 各配置项的含义如下:
+    - ``plugins``: 该``plugins``指的是gradle的插件, 在编译构建gradle项目时用到. 其中``org.jetbrains.intellij``专门用来开发调试IDEA插件
+    - ``intellij``: ``org.jetbrains.intellij``定义的属性, 用于指定开发调试IDEA插件时的一些选项, 包括SDK版本, SDK路径, 要引入的插件等
+    - ``dependencies``: 要依赖的第三方jar包, 将会引入到类路径中
+    - ``patchPluginXml.changeNote``: 版本变更信息
+
+``intellij``中的详细配置可以参考官方github中的[gradle-intellij-plugin](https://github.com/JetBrains/gradle-intellij-plugin#setup-dsl)
+
+#### 2.2.4 踩坑记录 - IDEA SDK下载
+使用Gradle管理IDEA插件开发项目时, 如果没有在``intellij.localPath``中指定本地的SDK目录, 则会自动下载指定SDK版本到本地gradle仓库中, 但是这个下载的过程也是很慢, 并且SDK文件也比较大. 
+
+<br/>
+
+笔者在了解了Gradle的本地仓库结构后找到了下列方法:
+1. 离线下载指定版本SDK的jar, source, pom文件
+    - 仓库地址为[https://www.jetbrains.com/intellij-repository/releases](https://www.jetbrains.com/intellij-repository/releases)
+    - ![intellij-repository](./resources/intellij-repository.png)
+2. 在``GRADLE_USER_HOME/caches/modules-2/files-2.1``目录下新建文件夹``com.jetbrains.intellij.idea/ideaIC/<version>``, 其中``<version>``如``2020.3.2``
+    - gradle本地仓库中, jar包及其源码和pom放在``<groupId>/<artifactId>/<version>``下, 与maven中树状划分的方案不同
+3. 计算jar, source, pom文件的sha1, 然后以sha1码在``<groupId>/<artifactId>/<version>``下创建3个文件夹. **如果某个sha1码以0开头, 则要把0给去掉**.
+    - 在windows中有自带的校验码生成工具certutil, 可以在cmd中使用certutil, 如:
+        ```cmd
+        certutil -hashfile ./ideaIC-2019.2.3.zip sha1
+        certutil -hashfile ./ideaIC-2019.2.3-sources.jar sha1
+        certutil -hashfile ./ideaIC-2019.2.3.pom sha1
+        ```
+4. 将jar, source, pom文件分别放在对应sha1码的文件夹下
+5. 更新idea中的gradle配置, gradle会识别到已下载好的jar, source, pom文件
+
+相比于maven, gradle的本地仓库多了sha1码这一层, 离线下载jar包会比较麻烦.
+
+对于其它依赖的jar包下载速度慢的问题, 可以通过配置国内gradle镜像的方法解决, 具体参考[网上解决方案](https://www.baidu.com/s?wd=gradle%E9%95%9C%E5%83%8F), 此处不再赘述.
+
+#### 2.2.5 插件选择
+上述我们提到, 可以依赖现有的插件进行开发, 那么**怎样发现已有的插件功能**, **怎么使用已有插件的功能**? 对于这两个问题, 笔者还没有好的方法, 只能提供几个建议:
+1. IDEA自带的插件在IDEA目录下的``plugins``目录中, 文件夹名即是插件名, 如"git4idea", 这些都比较容易使用. 其中有一些是集成在SDK中的, 另一些需要在plugin.xml和gradle.build中显式引入, 如"git4idea".
+2. 如果需要用到某个已有功能, 如git插件时, 回想一下在使用IDEA的时候, 从哪里点进去会触发该功能的Action, 然后通过IDEA强大的检索功能, 在``AnAction``的实现类中搜索可能的关键词. 前提是**相关插件已经被引入**, 并且有对应的**source**包. (在存在**source**包的时候, IDEA的索引功能会更强大).
+3. 阅读插件包的类的代码注释. 前提是**相关插件已经被引入**, 并且有对应的**source**包.
+    - ![查找插件](./resources/查找插件.png)
+3. 没事多去刷刷[官方文档](https://plugins.jetbrains.com/docs/intellij/welcome.html), 说不定能解决你的问题.
+## 参考页面
+
+https://github.com/JetBrains/gradle-intellij-plugin
+https://plugins.jetbrains.com/docs/intellij/welcome.html
+https://www.jetbrains.com/intellij-repository/releases/
