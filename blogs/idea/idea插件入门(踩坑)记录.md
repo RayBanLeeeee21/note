@@ -382,6 +382,6 @@ IDEA除了普通的DevKit项目模块, 也提供了由Gradle管理的IDEA插件�
 3. 没事多去刷刷[官方文档](https://plugins.jetbrains.com/docs/intellij/welcome.html), 说不定能解决你的问题.
 ## 参考页面
 
-https://github.com/JetBrains/gradle-intellij-plugin
-https://plugins.jetbrains.com/docs/intellij/welcome.html
-https://www.jetbrains.com/intellij-repository/releases/
+[官方github](https://github.com/JetBrains/gradle-intellij-plugin)  
+[IntelliJ Platform Plugin SDK官方文档](https://plugins.jetbrains.com/docs/intellij/welcome.html)  
+[SDK仓库](https://www.jetbrains.com/intellij-repository/releases/)  
