@@ -1,29 +1,39 @@
 # chapter 12 event
 
 服务器需要处理的事件:
-* 文件事件: 对socket事件的抽象
-* 时间事件
+- 文件事件: 对socket事件的抽象
+    - accept, read, write, close事件
+- 时间事件
 
 
-## 文件事件
-文件事件处理器
-* 模型:IO多路复用
-    * 用**单线程**来同时接收多个客户端的请求, **文件事件分派器**根据请求的类型分派给不同的**文件事件处理器**
-* 底层实现: 
-    * selec (POSIX, 一般系统都支持)
-    * epoll (LINUX)
-    * evport (Solaris)
-    * kqueue (Mac)
-    * 对不同的底层实现进行了包装, 但提供了相同的API
-    * 不同的底层实现可以替换, 根据实际情况进行选择
-* Redis规定的事件
-    * AE_READABLE事件
-        * 客户端connect()
-        * 客户端write()
-        * 客户端close()
-    * AE_WRITABLE事件
-        * 客户端read()
-    * 两种事件同时出现时, 优先处理AE_READABLE, 再处理AE_WRITABLE
+## 12.1 文件事件
+
+### 12.1.1 文件事件处理器的构成
+
+IO多路复用 & 文件事件处理器
+- **单线程**: 同时接收多个客户端的请求
+- **IO多路复用程序**将socket交给事件分派器
+- **文件事件分派器**根据请求的类型分派给不同的文件事件处理器
+- **文件事件处理器**处理事件
+  ![文件事件处理器](./resource/../resources/ch12-event-file-event-handler.png)
+
+### 12.1.2 IO多路复用程序的实现
+
+底层实现: 
+- select (POSIX, 一般系统都支持)
+- epoll (LINUX)
+- evport (Solaris)
+- kqueue (Mac)
+    
+
+redis包装了自己的API, 可以根据系统在编译时选择最好的IO复用函数实现
+- Redis规定的事件
+    - `AE_READABLE`事件
+        - 出现`readable`事件: 客户端进行`write()`或者`close()`
+        - 出现`acceptable`事件: 客户端进行`connect()`
+    - `AE_WRITABLE`事件: 
+        - 出现`writable`事件: 客户端`read()`
+    - 同时出现时, **`AE_READABLE`优先**
 * 文件事件处理器类型:
     * 连接应答处理器
     * 命令请求处理器
