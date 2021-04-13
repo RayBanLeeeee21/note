@@ -41,6 +41,8 @@ InnoDB为什么推荐使用自增ID作为主键
 - redo log
 - bin log
     - statement-base的不一致隐患
+        - 与`innodb_autoinc_lock_mode=2`的冲突
+        - 与`ISOLATION LEVEL=READ COMMITTED`的冲突
 - undo log
 
 
