@@ -5,9 +5,9 @@
 InnoDB体系架构
 - 内存池:
     - 存储进程/后台线程用到的内部数据结构
-    - 缓存磁盘中的数据
-    - 缓存重做日志(redo log)
-- 后台线程: 刷新缓存
+    - 缓存磁盘中的各种页(数据页, undo页等)
+- 后台线程: 刷新缓存到磁盘, 以及从磁盘读取数据到缓存
+
 
 
 ### 2.3.1 后台线程
@@ -49,10 +49,13 @@ Page Cleaner Thread: 刷新脏页
 ### 2.3.2 内存
 
 先验知识: [缓冲与缓存的区别](https://www.zhihu.com/question/26190832)
+参考[ch04-表#4.2.4 页](./ch04-表.md#424页)
+
+#### 1. 缓冲池
 
 缓冲池(Buffer Pool)
 - 以页为单位, 按需加载到内存中
-- 一个数据库可以有多个缓冲池实例, 减少竞争
+- 一个数据库可以有**多个缓冲池实例**, 减少竞争
 - 使用**LRU**算法管理页
 - 数据页类型:
     - 索引页
@@ -63,15 +66,91 @@ Page Cleaner Thread: 刷新脏页
     - InnoDB存储的锁信息
     - 数据字典信息
 <br/>
+![innodb体系架构](./resources/innodb-architecture.png)
 
+#### 2. LRU List, Free List 和 Flush List
+
+三种列表:
+- LRU list: 缓冲页不够时, 用来选择缓存进行回收
+- Free List: 空闲列表
+    - 伙伴算法进行合并
+- Flush List: 脏页列表
 
 LRU算法(Latsest Recent Used)
 - 中点插入策略(midpoint insertion strategy): 新加入的结点入到中点而不是队首, 防止把热点页刷掉
     - innodb_old_blocks_pct(37): 默认后3/8 
-    - 为什么不放队尾? 有些操作需要遍历所有的页, 如果放队首, 可能把热点页刷掉
+    - *为什么不放队尾*? 有些操作需要遍历所有的页, 如果放队首, 可能把热点页刷掉
     - innodb_old_blocks_time(1000ms): 新加载的页需要等一段时间才能进入new列表
+- 相关指标
+    - `innodb_old_blocks_time`: 新加入的空闲页要多久才能进行new部分
+        - `page make young`: 成功从old部分移动到new部分的页的数量
+        - `page not make young`: 由于`innodb_old_blocks_time`导致没有成功加入到new的页数量
+    - `Buffer pool hit rate`: 缓冲池命中率
 
-## 2.4 // todo
+#### 3. 重做日志缓冲
+
+重做日志相关话题:
+- [ch07-事务 #7.2.1 redo](./ch07-事务.md#721-redo)
+
+redo log的flush时机
+- Master Thread定时执行
+- 事务提交时
+- redo log缓冲池空间小于1/2
+
+## 2.4 Checkpoint技术
+
+持久性的实现方法-**Write Ahead Log**: 先写重做日志, 再修改页
+
+Checkpoint解决的问题:
+- 缩短数据库恢复时间: Checkpoint之前的redo log对应的操作都已同步到磁盘, 无须再重做
+- 缓冲池不够用时, 将脏页刷新到磁盘
+    - 强制更新Checkpoint, 使持久过的数据可以从缓冲池清理掉
+- 重做日志文件不够用时刷新脏页
+    - 强制更新Checkpoint, 使redo log文件中持久过数据的redo log rec可以被rotate覆盖
+
+LSN: Checkpoint用LSN作为标记
+<br/>
+
+Checkpoint选项:
+- 关闭时使用Sharp Checkpoint: 将所有脏页都刷新到数据库
+    - `innodb_fast_shutdown=1`时生效
+- 运行时使用Fuzzy Checkpoint: 只刷新一部分脏页
+<br/>
+
+
+Fuzzy Checkpoint时机:
+- Master Thread Checkpoint
+- FLUSH_LRU_LIST Checkpoint: LRU空闲页不够, 移除脏页时
+- Async/Sync Flush Checkpoint: redo log文件不够用
+- Dirty Page too much Checkpoint: 脏页太多
+<br/>
+
+// todo
+
+## 2.5 Master Thread的工作方式
+
+Master Thread的工作内容
+- 将redo log冲刷到磁盘
+- 刷新脏页到磁盘
+- 合并插入缓冲
+- 清理undo页(后到放到了Purge Thread)
+
+Master Thread的两种循环:
+- 大循环(Loop)
+
 
 ## 2.6 插入缓冲
+
+// todo
+
+## 2.6.2 两次写
+
+doublewrite: 将脏页刷新到磁盘时, 为防止宕机
+1. 先把1MB的脏页复制到`double write buffer`
+2. 把`double write buffer`, 分两次写到磁盘两个连续的区(2MB)(每次写完都做fsync)
+
+如果写脏页到磁盘时宕机, 则可以通过double write的两个区恢复
+如果double write的两个区不一致, 则丢弃double write的数据(而此时脏页并没有写到对应的页, 因此还是完整的)
+
+### 2.6.3 自适应哈希索引
 
