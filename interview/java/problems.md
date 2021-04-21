@@ -15,6 +15,8 @@
     - Channel
         - ServerSocketChannel
     - DirectByteBuffer
+    - AIO
+    - IO模型 & select & epoll
 - 涉及的设计模式:
 - String底层
     - 字符串常量池
@@ -57,12 +59,11 @@
 - 虚拟内存
 
 
-
-
 ## 算法:
 - 排序:
-    - 归排/**快排**/桶排/希排/堆排 
+    - 归排/**快排**/桶排/希排/**堆排** 
     - 复杂度
+    - 稳定性
 - 搜索: 深搜 / 广搜
 - 动规
 - 回溯
@@ -81,9 +82,16 @@
 - count(*) & count(1) & count(field)
 
 ## 分布式
-- uid
+- 分布式ID算法
 - 缓存
-- CAP
+    - 缓存一致性问题
+    - 缓存穿透, 击穿, 雪崩
+- 一致性问题
+    - CAP
+    - PAXOS
+    - ZAB
+- 限流
+- 熔断
 
 ## netty
 - NIO

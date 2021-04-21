@@ -21,7 +21,7 @@
 生产者(Producer): 创建Message, 发布到指定Topic
 * Message分配策略:
     * Message默认被均衡到不同的Partition
-    * 可根据Key与Partitioner生成Hash进行分区
+    * 自定义分区器: 可根据Key与Partitioner生成Hash进行分区
 
 消费者(Consumer): 订阅一或多个Topic, 按FIFO顺序消费
 * 偏移(offset): 用来判断Message是否被消费

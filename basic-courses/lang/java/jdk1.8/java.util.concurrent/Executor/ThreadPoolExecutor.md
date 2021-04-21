@@ -36,6 +36,12 @@ static class DefaultThreadFactory implements ThreadFactory {
     }
 ```
 
+## Worker
+
+Worker的特点
+- 携带一个task
+- 其本身是个锁(不可重入锁)
+
 ThreadPoolExecutor.Worker
 ```java
 private final class Worker
@@ -108,7 +114,7 @@ private final class Worker
 }
 ```
 
-# ThreadPoolExecutor
+## ThreadPoolExecutor
 * 机制:
     * 核心线程与最大线程
         * workerCount < corePoolSize
@@ -155,7 +161,109 @@ private final class Worker
     * STOP -> TIDYING: 线程池为空
     * TIDYING -> TERMINATED: terminated()方法处理完成
 * 方法实现
-    * execute
+    - `addWorker`
+        ```java
+        private boolean addWorker(Runnable firstTask, boolean core) {
+
+            // 两层循环: 尝试自增workerCount
+            //     第一层: 检查线程池状态
+            //     第二层: 检查workCount是否超出
+            retry:
+            for (;;) {
+                
+                int c = ctl.get();
+                int rs = runStateOf(c);
+
+                // 线程池要关闭了, 退出, 失败
+                if (rs >= SHUTDOWN &&       // STOP, TYDING, TERMINATED 时不能继续加入
+                    ! (rs == SHUTDOWN &&    // SHUTDOWN时, 如果workQueue不为空, 这种情况下可以加入不带task的Worker把剩余任务完成
+                    firstTask == null &&    
+                    !workQueue.isEmpty()))  // 为什么非空时不加入? 其它线程可以把剩下的任务处理完
+                    return false;
+
+                // 小循环
+                for (;;) {
+                    
+                    // 检查workerCount是否超出, 超出则失败
+                    int wc = workerCountOf(c);
+                    if (wc >= CAPACITY ||
+                        wc >= (core ? corePoolSize : maximumPoolSize))
+                        return false;
+                    
+                    // CAS尝试增加worker数, 增加成功才能退出大循环
+                    if (compareAndIncrementWorkerCount(c))
+                        break retry;
+
+                    // 再次检查线程池状态, 如果改变, 回到大循环检查状态
+                    c = ctl.get();
+                    if (runStateOf(c) != rs)
+                        continue retry;
+                }
+            }
+
+            boolean workerStarted = false;
+            boolean workerAdded = false;
+            Worker w = null;
+
+            try {
+
+                // 创建线程
+                w = new Worker(firstTask);
+                final Thread t = w.thread;
+
+                // worker带的线程不能为空
+                if (t != null) {
+                    final ReentrantLock mainLock = this.mainLock;
+                    // 尝试把新worker加入workers集, 在这之前要取得 mainLock
+                    mainLock.lock();
+                    try {
+                        // 取得 mainLock以后再检查一下状态
+                        int rs = runStateOf(ctl.get());
+                        if (rs < SHUTDOWN ||
+                            (rs == SHUTDOWN && firstTask == null)) {
+                            if (t.isAlive())                                // 线程不能被启动过
+                                throw new IllegalThreadStateException();
+                            
+                            // 加入到workers集, 并更新largestPoolSize
+                            workers.add(w);
+                            int s = workers.size();
+                            if (s > largestPoolSize)        // [2]
+                                largestPoolSize = s;
+                            workerAdded = true;
+                        }
+                    } finally {
+                        mainLock.unlock();
+                    }
+
+                    // 加入了以后尝试启动worker
+                    if (workerAdded) {      
+                        t.start();
+                        workerStarted = true;
+                    }
+                }
+            } finally {
+                // 如果没有成功启动worker, 还要再加锁把worker再去掉, 可能原因
+                //      1. worker的线程启动过
+                //      2. 线程池被关闭
+                if (! workerStarted)
+                    addWorkerFailed(w);
+            }
+            return workerStarted;
+        }
+
+        private void addWorkerFailed(Worker w) {
+            final ReentrantLock mainLock = this.mainLock;
+            mainLock.lock();
+            try {
+                if (w != null)
+                    workers.remove(w);
+                decrementWorkerCount();     // 循环cas将work数减1
+                tryTerminate();             // 尝试终止(RUNNING状态时不会成功)
+            } finally {
+                mainLock.unlock();
+            }
+        }   
+    - execute
         ```java
         /**
             如果task不能被提交, 可能因为shutdown也可能因为容量达到上限,
@@ -195,144 +303,8 @@ private final class Worker
             else if (!addWorker(command, false))
                 reject(command);
         }
-
-        private boolean addWorker(Runnable firstTask, boolean core) {
-            retry:
-            for (;;) {
-                
-                // 获取ctl
-                int c = ctl.get();
-                int rs = runStateOf(c);
-
-                if (rs >= SHUTDOWN &&       // STOP, TYDING, TERMINATED 时不能继续加入
-                    ! (rs == SHUTDOWN &&    // SHUTDOWN时, 如果workQueue不为空, 这种情况下可以加入不带task的Worker把剩余任务完成
-                    firstTask == null &&    
-                    !workQueue.isEmpty()))
-                    return false;
-
-                // 增加worker之前必须检查worker数是否合法, 还要争夺增加worker的机会
-                for (;;) {
-                    // 以下情况失败:
-                    //     新worker为核心worker, 且大于核心worker数
-                    //     新worker为普通worker, 且大于最大worker数
-                    int wc = workerCountOf(c);
-                    if (wc >= CAPACITY ||
-                        wc >= (core ? corePoolSize : maximumPoolSize))
-                        return false;
-                    
-                    // [1] 通过CAS尝试增加worker数来获得增加worker的机会
-                    if (compareAndIncrementWorkerCount(c))
-                        break retry;
-
-                    // 如果因线程池状态改变而失败, 那要重新开始大循环(retry), 重检查状态
-                    c = ctl.get();
-                    if (runStateOf(c) != rs)
-                        continue retry;
-                    // 如果因竞争修改worker数而失败, 则重新尝试改变worker数
-                }
-            }
-
-            boolean workerStarted = false;
-            boolean workerAdded = false;
-            Worker w = null;
-            try {
-                w = new Worker(firstTask);
-                final Thread t = w.thread;
-
-                // worker带的线程不能为空
-                if (t != null) {
-                    final ReentrantLock mainLock = this.mainLock;
-                    // 尝试把新worker加入workers集, 在这之前要取得 mainLock
-                    mainLock.lock();
-                    try {
-                        // 取得 mainLock以后再检查一下状态
-                        int rs = runStateOf(ctl.get());
-                        if (rs < SHUTDOWN ||
-                            (rs == SHUTDOWN && firstTask == null)) {
-                            if (t.isAlive())                                // 线程不能被启动过
-                                throw new IllegalThreadStateException();
-                            
-                            // 加入到workers集, 并更新largestPoolSize
-                            workers.add(w);
-                            int s = workers.size();
-                            if (s > largestPoolSize)        // [2]
-                                largestPoolSize = s;
-                            workerAdded = true;
-                        }
-                    } finally {
-                        mainLock.unlock();
-                    }
-                    // 更新成功才启动worker的线程
-                    if (workerAdded) {      
-                        t.start();
-                        workerStarted = true;
-                    }
-                }
-            } finally {
-                // 任务开始失败, 原因:
-                //      worker的线程为空
-                //      worker的线程启动过
-                //      线程池被关闭
-                // 把worker从队列中去掉
-                if (! workerStarted)
-                    addWorkerFailed(w);
-            }
-            return workerStarted;
-        }
-        // [1] 如果不竞争worker数, 那可能会造成线程数溢出
-        // [2] largestPoolSize只有抢到mainLock才能更改
-
-        private void addWorkerFailed(Worker w) {
-            final ReentrantLock mainLock = this.mainLock;
-            mainLock.lock();
-            try {
-                if (w != null)
-                    workers.remove(w);
-                decrementWorkerCount();     // 循环cas将work数减1
-                tryTerminate();             // 尝试终止(RUNNING状态时不会成功)
-            } finally {
-                mainLock.unlock();
-            }
-        }  
-
-        final void tryTerminate() {
-            for (;;) {
-                int c = ctl.get();
-                // 以下情况不能终止:
-                if (isRunning(c) ||                                         // RUNNING时不能终止, 未经用户允许
-                    runStateAtLeast(c, TIDYING) ||                          // TIDYING以后的阶段无须终止, 因为有其它线程处理过了
-                    (runStateOf(c) == SHUTDOWN && ! workQueue.isEmpty()))   // SHUTDOWN且workQueue非空, 不能终止
-                    return;
-                
-                // 运行到此时, 可能的状态:
-                //     SHUTDOWN 且 workQueue已空
-                //     STOP
-                // 需要传播中断, 防止有work在getTask()的workQueue.take()中被死锁
-                if (workerCountOf(c) != 0) { 
-                    interruptIdleWorkers(ONLY_ONE);     // 中断worker之前要取得worker的锁
-                    return;
-                }
-
-                final ReentrantLock mainLock = this.mainLock;
-                mainLock.lock();
-                try {
-                    if (ctl.compareAndSet(c, ctlOf(TIDYING, 0))) {  // 争夺状态, CAS改成TIDYING
-                        try {
-                            terminated();                   // 执行 hook 方法
-                        } finally {
-                            ctl.set(ctlOf(TERMINATED, 0));  // 状态改成TERMINATED
-                            termination.signalAll();
-                        }
-                        return;
-                    }
-                } finally {
-                    mainLock.unlock();
-                }
-                // else retry on failed CAS
-            }
-        } 
         ```
-    * runWorker
+    - runWorker
         ```java
         /**
             runWorker是DefaultThreadFactory为worker生成的线程中的Runnable 的run方法的内容
@@ -344,7 +316,7 @@ private final class Worker
             Runnable task = w.firstTask;
             w.firstTask = null;
 
-            w.unlock();                                 // 开启中断功能
+            w.unlock();                                 // 将state从初始(-1)改成0, 表示可以被中断
             boolean completedAbruptly = true;
             try {
                 
@@ -401,7 +373,7 @@ private final class Worker
                 int c = ctl.get();
                 int rs = runStateOf(c);
 
-                // STOP 或者 SHUTDOWN且workQueue为空时, 不再分配work, 返回null表示把当前worker取消掉
+                // shutdown并且任务已空, 则 workerCount-1, 返回
                 if (rs >= SHUTDOWN && (rs >= STOP || workQueue.isEmpty())) {                    // [1]
                     decrementWorkerCount();
                     return null;
@@ -500,6 +472,44 @@ private final class Worker
             }
             tryTerminate();
         }
+
+        final void tryTerminate() {
+            for (;;) {
+                int c = ctl.get();
+                // 以下情况不能终止:
+                if (isRunning(c) ||                                         // RUNNING时不能终止, 未经用户允许
+                    runStateAtLeast(c, TIDYING) ||                          // TIDYING以后的阶段无须终止, 因为有其它线程处理过了
+                    (runStateOf(c) == SHUTDOWN && ! workQueue.isEmpty()))   // SHUTDOWN且workQueue非空, 不能终止
+                    return;
+                
+                // 运行到此时, 可能的状态:
+                //     SHUTDOWN 且 workQueue已空
+                //     STOP
+                // 需要传播中断, 防止有work在getTask()的workQueue.take()中被死锁
+                if (workerCountOf(c) != 0) { 
+                    interruptIdleWorkers(ONLY_ONE);     // 中断worker之前要取得worker的锁
+                    return;
+                }
+
+                final ReentrantLock mainLock = this.mainLock;
+                mainLock.lock();
+                try {
+                    if (ctl.compareAndSet(c, ctlOf(TIDYING, 0))) {  // 争夺状态, CAS改成TIDYING
+                        try {
+                            terminated();                   // 执行 hook 方法
+                        } finally {
+                            ctl.set(ctlOf(TERMINATED, 0));  // 状态改成TERMINATED
+                            termination.signalAll();
+                        }
+                        return;
+                    }
+                } finally {
+                    mainLock.unlock();
+                }
+                // else retry on failed CAS
+            }
+        } 
+        ```
 
         private void interruptIdleWorkers(boolean onlyOne) {
             final ReentrantLock mainLock = this.mainLock;

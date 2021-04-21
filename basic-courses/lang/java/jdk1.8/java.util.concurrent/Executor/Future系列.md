@@ -1,6 +1,8 @@
 [](http://www.importnew.com/25286.html)
 
-其它接口
+
+
+## 相关接口
 ``` java
 public interface Executor {
     void execute(Runnable command);
@@ -21,62 +23,67 @@ public interface RunnableFuture<V> extends Runnable, Future<V> {
 ```
 
 Future接口
-* boolean cancel(boolean mayInterruptIfRunning);
-    * 成功cancel或者状态为NEW时, 返回true, 然后不能再被run()
-    * 状态已经完成或者已经cancell的时候返回false
-    * 参数为true时会中断线程
-* isDone(): 执行完成(非NEW)
-* V get() throws InterruptedException, ExecutionException: 
-    * 阻塞等待结果, 直到等到结果, 中断或者其它异常
-    * 除了两个声明的受查异常以外, 还有CancellationException
-    * ExecutionException中包装异常原因
-* V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException;
-    * 阻塞等待结果, 直到等到结果, 中断, 超时异常或者其它异常
+- `boolean cancel(boolean mayInterruptIfRunning);`
+    - 成功cancel或者状态为NEW时, 返回true, 然后不能再被run()
+    - 状态已经完成或者已经cancel的时候返回false
+    - 参数为true时会中断线程
+- `isDone()`: 执行完成(非NEW)
+- V get() throws InterruptedException, ExecutionException: 
+    - 阻塞等待结果, 直到等到结果, 中断或者其它异常
+    - 除了两个声明的受查异常以外, 还有CancellationException
+    - ExecutionException中包装异常原因
+- V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException;
+    - 阻塞等待结果, 直到等到结果, 中断, 超时异常或者其它异常
 
 状态
-* 状态(带ING的都是**过渡状态**, 时间比较短)
-    * NEW: 创建未运行, 或者运行中 (两个子状态由runner是否为null来区分)
-    * COMPLETING: 运行结束或者异常, 结果(异常)未保存到outcome
-    * NORMAL: 结果保存到了outcome
-    * EXCEPTIONAL: 异常保存到了outcome
-    * CANCELLED: 用户调用cancel(false)
-    * INTERRUPTING: 用户调用cancel(true), 但任务还未被中断
-    * INTERRUPTED: 用户调用cancel(true), 并且任务已经被中断
-* 可能的转移状态
-    * NEW -> COMPLETING -> NORMAL
-    * NEW -> COMPLETING -> EXCEPTIONAL
-    * NEW -> CANCELLED
-    * NEW -> INTERRUPTING -> INTERRUPTED
+- 状态(带ING的都是**过渡状态**, 时间比较短)
+    - `0-NEW`: 创建未运行, 或者运行中 (两个子状态由runner是否为null来区分)
+    - `1-COMPLETING`: 运行结束或者异常, 结果(异常)未保存到outcome
+    - `2-NORMAL`: 结果保存到了outcome
+    - `3-EXCEPTIONAL`: 异常保存到了outcome
+    - `4-CANCELLED`: 用户调用cancel(false)
+    - `5-INTERRUPTING`: 用户调用cancel(true), 但任务还未被中断
+    - `6-INTERRUPTED`: 用户调用cancel(true), 并且任务已经被中断
+- 可能的转移状态
+    ```
+    NEW--->COMPLETING--> NORMAL
+     |          |------> EXCEPTIONAL
+     |---->CANCELLED
+     |---->INTERRUPTING---->INTERRUPTED
+    ``` 
 
+
+## FutureTask
 
 FutureTask
-* 特点:
-    * 实现了RunnableFuture接口
-    * 如果cancel()时对callable进行中断, 只有run()的线程知道发生了中断, get()线程只能捕捉到CancellationException
-* 域:
-    * **volatile** int state: 状态
-        * 作为互斥量用来控制对callable, outcome的读写
-    * Callable<V> callable: 用来保存任务
-        * 通过unsafe类的访问来保持可见性
-    * Object outcome: 保存callable.call()的结果或者抛出的异常
-        * 线程通过抢夺state来取得读写outcome的机会
-    * **volatile** Thread runner: 运行callable的线程
-        * runner被作互斥量来判断任务是否开始, 开始run()的时候被设为当前线程, 运行结束被设为null
-    * **volatile** WaitNode waitNode: 保存等待结果的线程的队列
+- 特点:
+    - 实现了RunnableFuture接口
+    - 如果cancel()时对callable进行中断, 只有run()的线程知道发生了中断, get()线程只能捕捉到CancellationException
+- 域:
+    - **volatile** int state: 状态
+        - 作为互斥量用来控制对callable, outcome的读写
+    - Callable<V> callable: 用来保存任务
+        - 通过unsafe类的访问来保持可见性
+    - Object outcome: 保存callable.call()的结果或者抛出的异常
+        - 线程通过抢夺state来取得读写outcome的机会
+    - **volatile** Thread runner: 运行callable的线程
+        - runner被作互斥量来判断任务是否开始, 开始run()的时候被设为当前线程, 运行结束被设为null
+    - **volatile** WaitNode waitNode: 保存等待结果的线程的队列
 
         
-* run()
+- `run()`
     ```java
 
     public void run() {
-        // 状态为NEW则竞争CAS(runner, null, currentThread()) (与其它run()竞争)
-        if (state != NEW ||                                                     // [1]
+        // 对runner做CAS, 保证只有一个线程能运行run()
+            // 成功则进入临界区
+        if (state != NEW ||
             !UNSAFE.compareAndSwapObject(this, runnerOffset,                
                                          null, Thread.currentThread()))
             return;
         try {
             Callable<V> c = callable;
-            if (c != null && state == NEW) {        // [2] 重新检查
+            if (c != null && state == NEW) {        // 进入临界区先检查一下状态能不能用
                 V result;
                 boolean ran;
                 try {
@@ -86,40 +93,43 @@ FutureTask
                     result = null;
                     ran = false;
                     // 保存异常
-                    setException(ex);
+                    setException(ex);               // 设置异常
                 }
-                if (ran)
-                    // 保存正常结果
-                    set(result);
+                if (ran) set(result);               // 设置结果
             }
         } finally {
-            // 为阻止其它线程并发run(), 在运行结束之前runner都不能为空
+            
+            // 释放runner锁
             runner = null;
             
-            // 未竞争过cancel()方法时, 让步直到CANCELLED(即cancel()完成)
+            // 有线程做了带中断的cancel, 则要yield()到中断处理结束
+                // 如果run()没有发生过sleep()/wait(), 可能没法发现中断, 没有InterruptedException
             int s = state;
             if (s >= INTERRUPTING)
-                handlePossibleCancellationInterrupt(s);  // 循环yield()直到cancel()的线程完成cancel()
+                handlePossibleCancellationInterrupt(s);
         }
     }
-    // [1] 多个run()同时开始时, 以runner作为互斥量, 线程争着把runner从null改(cas)成指向自己
-    // [2] 运行到这一点时, 很可能其它线程cancel()方法会把state改为非null, 所以要再检查
     
     
     protected void set(V v) {
-        // 竞争 CAS(state, NEW, COMPLETING) (与cancel()竞争)
+        // 尝试把状态变成COMPLETING, 同时判断是否已Cancel, 是的话就退出
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = v;
             UNSAFE.putOrderedInt(this, stateOffset, NORMAL); 
+
+            // 如果成功的话, 就要通知所有的等待者
             finishCompletion();
         }
     }
 
     protected void setException(Throwable t) {
-        // 竞争 CAS(state, NEW, COMPLETING) (与cancel()竞争)
+        // CAS尝试把状态变成COMPLETING
+            // 尝试失败, 则说明有另一个线程抢到了cancel机会
         if (UNSAFE.compareAndSwapInt(this, stateOffset, NEW, COMPLETING)) {
             outcome = t;
             UNSAFE.putOrderedInt(this, stateOffset, EXCEPTIONAL); // final state
+
+            // 异常也要通知所有的等待者
             finishCompletion();
         }
     }

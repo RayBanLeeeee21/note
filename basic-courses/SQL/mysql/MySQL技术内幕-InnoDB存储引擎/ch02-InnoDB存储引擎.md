@@ -125,7 +125,22 @@ Fuzzy Checkpoint时机:
 - Dirty Page too much Checkpoint: 脏页太多
 <br/>
 
-// todo
+
+Async/Sync Flush CheckPoint:
+-   ```python
+    checkpoint_age = redo_lsn - checkpoint_lsn          # 未同步到磁盘的部分redo log
+    async_water_mark = 0.75 * total_redo_log_file_size
+    sync_water_mark  = 0.9  * total_redo_log_file_size
+
+    # 以不阻塞请求线程的方式flush, 阻塞当前查询线程
+    if checkpoint_age > async_water_mark                
+        doAsyncFlush()
+    
+    # 以阻塞请求线程的方式flush, 阻塞所有用户线程
+    elif checkpoint_age > async_water_mark              
+        dosyncFlush()
+    ```
+
 
 ## 2.5 Master Thread的工作方式
 
@@ -153,4 +168,34 @@ doublewrite: 将脏页刷新到磁盘时, 为防止宕机
 如果double write的两个区不一致, 则丢弃double write的数据(而此时脏页并没有写到对应的页, 因此还是完整的)
 
 ### 2.6.3 自适应哈希索引
+
+自适应哈希索引: 针对热点页建立的哈希索引
+- 要求:
+    - 访问模式固定
+        - `where a=xxx`或者`where a=xxx and b=xxx`, 但不能交替
+    - 以该模式访问了100次
+    - 页通过该模式访问了N次, N=页记录/16
+- 只适用等值, 不能范围, 不能排序
+
+
+### 2.6.4 异步IO
+
+异步IO: 发起IO后不用等待直接返回
+- IO合并: 把多个IO合成一个, 要求写的页是比较连续的
+- 需要系统支持
+
+### 2.6.4 刷新邻接页
+
+刷新脏页的时候, 顺序把周围的页也刷了
+
+## 2.7 启动, 关闭与恢复
+
+`innodb_fast_shutdown`: 数据库关闭时: 
+- 0: 所有脏页刷到磁盘; 完成所有full purge和merge insert buffer
+- 1(默认): 所有脏页刷到磁盘
+- 2: 重做日志写到磁盘
+    - 这样可以恢复
+
+
+
 
