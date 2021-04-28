@@ -1,79 +1,59 @@
 [](http://www.importnew.com/25286.html)
 
 
+## 先验知识
 
-## 相关接口
-``` java
-public interface Executor {
-    void execute(Runnable command);
-}
+`Unsafe.putOrderedObject()`: 
+- 参考[知乎 - ConcurrentHashMap大量使用Unsafe的putOrderedObject出于什么考虑?](https://www.zhihu.com/question/60888757)
+> putOrderedObject是putObjectVolatile的内存非立即可见版本；lazySet是使用Unsafe.putOrderedObject方法，这个方法在对低延迟代码是很有用的，它能够实现非堵塞的写入，这些写入不会被Java的JIT重新排序指令(instruction reordering)，这样它使用快速的存储-存储(store-store) barrier, 而不是较慢的存储-加载(store-load) barrier, 后者总是用在volatile的写操作上，这种性能提升是有代价的，虽然便宜，也就是写后结果并不会被其他线程看到，甚至是自己的线程，通常是几纳秒后被其他线程看到，这个时间比较短，所以代价可以忍受。
 
-/**
-    与Runnable相比, Callable有返回值, 且可以捕捉异常
-*/
-public interface Callable<V> {
-    V call() throws Exception;
-}
+### 相关接口
+参考[相关接口](./相关接口.md)
 
-
-public interface RunnableFuture<V> extends Runnable, Future<V> {
-    void run();
-}
-
-```
-
-Future接口
-- `boolean cancel(boolean mayInterruptIfRunning);`
-    - 成功cancel或者状态为NEW时, 返回true, 然后不能再被run()
-    - 状态已经完成或者已经cancel的时候返回false
-    - 参数为true时会中断线程
-- `isDone()`: 执行完成(非NEW)
-- V get() throws InterruptedException, ExecutionException: 
-    - 阻塞等待结果, 直到等到结果, 中断或者其它异常
-    - 除了两个声明的受查异常以外, 还有CancellationException
-    - ExecutionException中包装异常原因
-- V get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException;
-    - 阻塞等待结果, 直到等到结果, 中断, 超时异常或者其它异常
+## FutureTask
 
 状态
 - 状态(带ING的都是**过渡状态**, 时间比较短)
     - `0-NEW`: 创建未运行, 或者运行中 (两个子状态由runner是否为null来区分)
-    - `1-COMPLETING`: 运行结束或者异常, 结果(异常)未保存到outcome
+    - `1-COMPLETING`: 运行结束, 结果/异常尚未保存
     - `2-NORMAL`: 结果保存到了outcome
     - `3-EXCEPTIONAL`: 异常保存到了outcome
     - `4-CANCELLED`: 用户调用cancel(false)
     - `5-INTERRUPTING`: 用户调用cancel(true), 但任务还未被中断
     - `6-INTERRUPTED`: 用户调用cancel(true), 并且任务已经被中断
 - 可能的转移状态
-    ```
-    NEW--->COMPLETING--> NORMAL
-     |          |------> EXCEPTIONAL
-     |---->CANCELLED
-     |---->INTERRUPTING---->INTERRUPTED
-    ``` 
+    - run(): 
+        - set(): `NEW-> COMPLETING -> NORMAL`
+        - setException(): `NEW-> COMPLETING -> EXCEPTIONAL`
+    - cancel():
+        - cancel(false): `NEW -> CANCELLED`
+        - cancel(true): `NEW -> INTERRUPTING -> INTERRUPTED`
+- 问题:
+    - 为什么要区分`INTERRUPTING`和`INTERRUPTED`? 
+        - 如果只有一种中断状态, cancel线程可能刚设置完标志, 就被run线程看到并清除中断标志, 然后cancel线程又调用其中断, 造成run线程被中断而未发现
+        - 分成两个状态后, cancel线程可以保证, run()线程在看到`INTERRUPTED`时, interrupt()已经触发过
 
 
-## FutureTask
-
-FutureTask
-- 特点:
-    - 实现了RunnableFuture接口
-    - 如果cancel()时对callable进行中断, 只有run()的线程知道发生了中断, get()线程只能捕捉到CancellationException
-- 域:
+并发问题
+- 被竞争变量
     - **volatile** int state: 状态
         - 作为互斥量用来控制对callable, outcome的读写
-    - Callable<V> callable: 用来保存任务
-        - 通过unsafe类的访问来保持可见性
-    - Object outcome: 保存callable.call()的结果或者抛出的异常
-        - 线程通过抢夺state来取得读写outcome的机会
     - **volatile** Thread runner: 运行callable的线程
         - runner被作互斥量来判断任务是否开始, 开始run()的时候被设为当前线程, 运行结束被设为null
     - **volatile** WaitNode waitNode: 保存等待结果的线程的队列
-
+- 竞争关系:
+    - `run()`之间: 通过乐观锁`CAS(runner)`来保证安全, 谁把`runner`设为自己谁就抢到锁
+        - `set()`和`setException()`之间没有竞争关系, 是`run()`线程的不同分支
+    - `run()`与`cancel()`: 
+        - 通过乐观锁`CAS(state)`来保证结果(outcome)与状态的一致
+        - 通过乐观锁`CAS(waiter)`队列竞争唤醒等待者的机会
+    - `run()`与`get()`:
         
-- `run()`
-    ```java
 
+### FutureTask源码解析
+
+- 执行: `run()`
+    ```java
     public void run() {
         // 对runner做CAS, 保证只有一个线程能运行run()
             // 成功则进入临界区
@@ -83,19 +63,18 @@ FutureTask
             return;
         try {
             Callable<V> c = callable;
-            if (c != null && state == NEW) {        // 进入临界区先检查一下状态能不能用
+            if (c != null && state == NEW) {        // 进临界区第一步, 先重检查状态
                 V result;
                 boolean ran;
                 try {
-                    result = c.call();
+                    result = c.call();              // if...do操作不是原子的, 因此可能会有白跑一趟的问题
                     ran = true;
                 } catch (Throwable ex) {
                     result = null;
                     ran = false;
-                    // 保存异常
-                    setException(ex);               // 设置异常
+                    setException(ex);               // 尝试设置异常
                 }
-                if (ran) set(result);               // 设置结果
+                if (ran) set(result);               // 尝试设置结果
             }
         } finally {
             
@@ -106,7 +85,7 @@ FutureTask
                 // 如果run()没有发生过sleep()/wait(), 可能没法发现中断, 没有InterruptedException
             int s = state;
             if (s >= INTERRUPTING)
-                handlePossibleCancellationInterrupt(s);
+                handlePossibleCancellationInterrupt(s); // while (INTERRUPTING) yield();
         }
     }
     
@@ -139,9 +118,11 @@ FutureTask
     */
     private void finishCompletion() {
         
-        // 循环竞争CAS(waiters, currentWaiter(即q), null) (与其它finishCompletion竞争)
+        // 自旋锁竞争通知的机会, 抢不到(变成null)直接退出
         for (WaitNode q; (q = waiters) != null;) {
             if (UNSAFE.compareAndSwapObject(this, waitersOffset, q, null)) {
+
+                // 逐一唤醒等待者线程
                 for (;;) {
                     Thread t = q.thread;
                     if (t != null) {
@@ -159,19 +140,17 @@ FutureTask
         }
 
         done();                 // hook方法
-
-        callable = null;        // to reduce footprint
+        callable = null;        // help gc
     }
     ```
-* runAndReset
+* `runAndReset()`
     ```java
     /**
-        与run()相比, runAndReset()运行完不保存结果, 不改变状态(还是保持为NEW)
-        对异常和cancel的处理与run()相同, 不过会返回false表示失败
+        与run()相比, runAndReset()运行完不保存结果, 并且会在成功时重置状态为NEW
+        失败/取消后不可复用
     */
     protected boolean runAndReset() {
-        // state不是NEW(COMPLETING, NORMAL, EXCEPTIONAL, INTERRUPTED, INTERRUPTING CANCELLED)
-        // 或者run()的机会被其它线程抢走
+        // 注意一旦状态出现过异常或中断, 就永远不能再复用了
         if (state != NEW ||
             !UNSAFE.compareAndSwapObject(this, runnerOffset,
                                          null, Thread.currentThread()))
@@ -182,11 +161,10 @@ FutureTask
             Callable<V> c = callable;
             if (c != null && s == NEW) {
                 try {
-                    c.call();               // 不保存结果, 因为无法知道结果是不是正确的那个            
+                    c.call();               // 跑完重置, 不保存结果            
                     ran = true; 
                 } catch (Throwable ex) {
-                    // 出异常时, 把异常保存在outcome
-                    setException(ex);
+                    setException(ex);       // 异常后不可复用, 因此可以保存
                 }
             }
         } finally {
@@ -201,7 +179,7 @@ FutureTask
         return ran && s == NEW; 
     }
     ```
-* boolean cancel(boolean mayInterruptIfRunning)
+* `boolean cancel(boolean mayInterruptIfRunning)`
     ```java
     public boolean cancel(boolean mayInterruptIfRunning) {
         // 非NEW状态
@@ -231,71 +209,29 @@ FutureTask
         return true;
     }
     ```
-* get
+* `V get()`
     ```java
+    /**
+     * get()线程在自己被中断时会抛中断异常
+     * 如果是run()线程被中断, 则run()线程收到中断异常, 而get()线程收到Cancelled异常
+     */
     public V get() throws InterruptedException, ExecutionException {
         // 先等到状态达到NORMAL, EXCEPTIONAL或者INTERRUPTING, INTERRUPTED
         int s = state;
         // 还未完成, 则循环阻塞等待, 直到正常(NORMAL)或者异常结束(EXCEPTIONAL)
         if (s <= COMPLETING)
-            s = awaitDone(false, 0L);                           // [1]
-        // 返回结果之前检查是否被cancel或者出异常   
-        // 被cancel要抛CancellationException
-        // 出异常要抛new ExecutionException(outcome);
-        return report(s);                                       // [2]
+            s = awaitDone(false, 0L);
+        
+        // 根据执行结果, 决定返回结果还是抛异常
+        return report(s);
     }
-    // [1] get()的线程被中断时, 会从[1]处抛出中断异常
-    // [2] callable.run()如果内部中断而抛出异常时, get()的线程会从[2]处抛出一个cause为InterruptedException的ExecutionException
-    //     也就是说该中断异常本质上与其它类型的callable.run()内部发生的异常无区别;
-    //     但如果另一个线程cancel(true), 导致callable.run()抛出中断异常, [2]处只会抛出CancellationException, 中断异常被忽略
-
-    private int awaitDone(boolean timed, long nanos)
-        throws InterruptedException {
-        final long deadline = timed ? System.nanoTime() + nanos : 0L;
-        WaitNode q = null;
-        boolean queued = false;
-
-        // 循环(检查中断, 状态, 入队, 超时, 都未发生则阻塞)
-        for (;;) {
-            // 首先检查中断, 刚运行就检查到中断或者LockSupport.park中发生中断, 跳转到此
-            // 先把中断标志清除, 然后把自己线程从等待队列中清理掉, 最后抛中断异常
-            if (Thread.interrupted()) {
-                removeWaiter(q);
-                throw new InterruptedException();
-            }
-
-            int s = state;
-            // 已结束, 直接返回状态
-            if (s > COMPLETING) {
-                if (q != null)
-                    q.thread = null;
-                return s;
-            }
-            // 如果接近完成, 则让步等待
-            else if (s == COMPLETING) 
-                Thread.yield();
-            // 1. 把当前线程保存到WaitNode
-            else if (q == null)
-                q = new WaitNode();
-            // 2. 如果没有入队, 循环CAS尝试加入队头, 入队后才能LockSupport.park()
-            else if (!queued)
-                queued = UNSAFE.compareAndSwapObject(this, waitersOffset,
-                                                     q.next = waiters, q);
-            // 3.1 阻塞等待直到超时, 超时要把自己从等待队列去掉
-            else if (timed) {
-                nanos = deadline - System.nanoTime();
-                if (nanos <= 0L) {
-                    removeWaiter(q);                    // 把q的线程设为null, 然后把队列中线程为null的结点都清理掉
-                    return state;
-                }
-                LockSupport.parkNanos(this, nanos);
-            }
-            // 3.2 阻塞等待
-            else
-                LockSupport.park(this);                 // 此时如果发生中中断, 只会被置位, 不会抛异常
-        }
-    }
-
+    
+    /**
+     * 根据执行结果, 决定以下分支: 
+     *      1. 返回结果; 
+     *      2. 抛Cancelled异常(被取消); 
+     *      3. 抛ExecutionException(其它异常)
+     */
     private V report(int s) throws ExecutionException {
         Object x = outcome;
         if (s == NORMAL)
@@ -305,11 +241,79 @@ FutureTask
         throw new ExecutionException((Throwable)x);
     }
 
+    private int awaitDone(boolean timed, long nanos)
+        throws InterruptedException {
+        final long deadline = timed ? System.nanoTime() + nanos : 0L;
+        WaitNode q = null;
+        boolean queued = false;
+
+        // 循环(1. 检查中断; 2. 检查状态; 3. 尝试入队; 4. 检查超时; 5. 都未发生则进入阻塞)
+        for (;;) {
+            // 1. 检查中断标志, 发生中断则出队
+            if (Thread.interrupted()) {
+                removeWaiter(q);
+                throw new InterruptedException();
+            }
+
+            // 2. 检查状态. 如果结束了, 只要清理q.thread, 队列有其它线程清理
+            int s = state;
+            if (s > COMPLETING) {
+                if (q != null)
+                    q.thread = null;
+                return s;
+            }
+            // 如果接近完成, 则yield()等待
+            else if (s == COMPLETING) 
+                Thread.yield();
+            // 3. CAS尝试入队
+            else if (q == null)
+                q = new WaitNode();
+            else if (!queued)
+                queued = UNSAFE.compareAndSwapObject(this, waitersOffset,
+                                                     q.next = waiters, q);
+            
+            // 4. 检查超时
+            else if (timed) {
+                nanos = deadline - System.nanoTime();
+                if (nanos <= 0L) {
+                    removeWaiter(q);                    // 把q的线程设为null, 然后把队列中线程为null的结点都清理掉
+                    return state;
+                }
+                LockSupport.parkNanos(this, nanos);
+            }
+            
+            // 5. 阻塞等待
+            else
+                LockSupport.park(this);                 // 此时如果发生中中断, 只会被置位, 不会抛异常
+        }
+    }
+
     /**
         把指定结点清理掉, 顺便清理已被中断或者超时的结点
         实现方法: 先把指定结点的线程设为null, 然后把线程为null的结点清理掉
     */
-    private void removeWaiter(WaitNode node);
+    private void removeWaiter(WaitNode node) {
+        if (node != null) {
+            node.thread = null;
+            retry:
+            for (;;) {          // restart on removeWaiter race
+                for (WaitNode pred = null, q = waiters, s; q != null; q = s) {
+                    s = q.next;
+                    if (q.thread != null)
+                        pred = q;
+                    else if (pred != null) {
+                        pred.next = s;
+                        if (pred.thread == null) // check for race
+                            continue retry;
+                    }
+                    else if (!UNSAFE.compareAndSwapObject(this, waitersOffset,
+                                                          q, s))
+                        continue retry;
+                }
+                break;
+            }
+        }
+    }
     ```
 * 超时get
     ```java
@@ -325,7 +329,3 @@ FutureTask
         return report(s);
     }
     ```
-* 分析:
-    * 并发run()时, runner作为互斥量
-    * 并发唤醒时, 以state和waiters的状态为互斥量
-    * run()和cancel()并发时, 以state为互斥量
