@@ -144,7 +144,7 @@ AQS
     //      (3)     Thread b (enq方法):         ...
     //      (7)     Thread b (enq方法):         node.prev = t;                              // 先让node指向自认为的tail
     //      (8)     Thread b (enq方法):         if (compareAndSetTail(t, node)) {           // tail被设为node
-    //      (9)     Thread b (enq方法):             pred.next = node;                       // pred指向新tail
+    //      (9)     Thread b (enq方法):             t.next = node;                          // pred指向新tail
     //      (10)    Thread a:                   compareAndSetNext(pred, predNext, null);    // pred指向null
 
     // [2]: 如果head结点的线程刚release完, 而head唤醒的线程还没设置新的head结点, 那该head结点无法唤醒其它结点, 所以要避开head结点, 选择阻塞的结点
