@@ -1,7 +1,8 @@
-个人笔记专用仓库 
+## 个人博客/笔记专用仓库
+自用为主, 仅供参考
 
 
-推荐
+## 推荐
 - java
     - [LongAdder & Striped64](./basic-courses/lang/java/jdk1.8/java.util.concurrent/atomic/LongAdder.md)
     - [Channel](./basic-courses/lang/java/jdk1.8/java.util.nio/Channel.md)
