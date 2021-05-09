@@ -1,3 +1,7 @@
+参考:
+参考
+- [HashMap多线程死循环问题](https://blog.csdn.net/xuefeng0707/article/details/40797085)
+
 HashMap17与18差别
 * 17将新结点加在链表头, 18加在链表尾
 * 17先检查扩容再加入新结点, 18先加入新结点再扩容
