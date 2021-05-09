@@ -252,7 +252,7 @@ AQS的域:
          * to clear in anticipation of signalling.  It is OK if this
          * fails or if status is changed by waiting thread.
          */
-        // 不懂为什么要改这里
+        // 不懂为什么没有必要改还去改
         int ws = node.waitStatus;
         if (ws < 0) compareAndSetWaitStatus(node, ws, 0);
 
@@ -318,7 +318,7 @@ AQS的域:
                 if (p == head) {
                     int r = tryAcquireShared(arg);
                     if (r >= 0) {
-                        setHeadAndPropagate(node, r);
+                        setHeadAndPropagate(node, r);   // 传播唤醒其它结点
                         p.next = null; // help GC
                         failed = false;
                         return true;
@@ -346,7 +346,7 @@ AQS的域:
     }
 ```
 
-#### 2.4.1 
+#### 2.4.1 setHeadAndPropagate() - 传播
 
 ```java
     private void setHeadAndPropagate(Node node, int propagate) {
@@ -364,32 +364,39 @@ AQS的域:
     }
 
     private void doReleaseShared() {
-        /*
-         * Ensure that a release propagates, even if there are other
-         * in-progress acquires/releases.  This proceeds in the usual
-         * way of trying to unparkSuccessor of head if it needs
-         * signal. But if it does not, status is set to PROPAGATE to
-         * ensure that upon release, propagation continues.
-         * Additionally, we must loop in case a new node is added
-         * while we are doing this. Also, unlike other uses of
-         * unparkSuccessor, we need to know if CAS to reset status
-         * fails, if so rechecking.
-         */
+        // 循环尝试
         for (;;) {
             Node h = head;
             if (h != null && h != tail) {
                 int ws = h.waitStatus;
+
+                // SIGNAL 表示后续结点需要被唤醒, 唤醒下个结点
+                    // 后续结点会被连锁地唤醒
                 if (ws == Node.SIGNAL) {
                     if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
                         continue;            // loop to recheck cases
                     unparkSuccessor(h);
                 }
-                else if (ws == 0 &&
-                         !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
+
+                // 循环CAS将propagation记录下来, 表示是共享模式的结点
+                else if (ws == 0 && !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
                     continue;                // loop on failed CAS
             }
-            if (h == head)                   // loop if head changed
-                break;
+
+            // 头结点变了需要重新读取, 然后再重试
+            if (h == head) break;
         }
+    }
+```
+
+### 2.5 releaseShared() - 共享锁释放
+
+```java
+    public final boolean releaseShared(int arg) {
+        if (tryReleaseShared(arg)) {
+            doReleaseShared();
+            return true;
+        }
+        return false;
     }
 ```
