@@ -1,80 +1,71 @@
+# ConcurrentHashMap
 
+## 特性
 
-ConcurrentHashMap
-* 特性:
-    * key/value不能为null (HashMap可以)
-    * ConcurrentHashMap18的实际初始化桶表容量比给定桶表容量大
-* Node
-    * 域
-        * final int hash
-        * final K key
-        * volatile V value
-        * volatile HashEntry<K,V> next
-* 初始化默认属性:
-    * 表容量: 16
-    * loadFactor: 0.75
-        * ConcurrentHashMap中虽然提供了loadFactor参数, 但实际loadFactor一直为0.75
-* 默认属性:
-    * DEFAULT_CAPACITY = 16
-* 相关属性计算
-* sizeCtl的含义:
-    * 在表分配之前, 用来保存第一次分配表的大小
-    * 分配表时, 用来作为分配表的信号量
-    * 在表分配以后, 用来保存阈值
-    * sizeCtl == 0: 表示取默认大小DEFAULT_CAPACITY=16
-    * sizeCtl == -1: 有线程正在创建表
-    * sizeCtl > 0: 表示将要分配的表大小(分配表前); 表示表的阈值(表分配以后)
+特点:
+- key/value不能为null (HashMap可以)
+- ConcurrentHashMap18的实际初始化桶表容量比给定桶表容量大(取整为2的幂)
+
+默认属性
+- 容量
     ```java
-    /**
-        初次分配表
+    /** 
+        最大容量
+        - 最高两位用于控制
     */
-    private final Node<K,V>[] initTable() {
-        Node<K,V>[] tab; int sc;
-        // 1. 循环尝试, 直到自己创建成功或者其它线程创建成功
-        while ((tab = table) == null || tab.length == 0) {
-            // 1.1. sizeCtl == -1 表示其它线程正在创建, 只要yield就可以了
-            if ((sc = sizeCtl) < 0)
-                Thread.yield(); 
-
-            // 1.2. cas 抢 sizeCtl, 抢到设为-1; 抢到sizeCtl以后要再检查一次有没初始化
-            else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
-                try {
-                    if ((tab = table) == null || tab.length == 0) {
-
-                        // 1.2.1. 根据原sizeCtl来确定容量大小
-                        int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
-                        @SuppressWarnings("unchecked")
-                        Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
-                        table = tab = nt;
-                        sc = n - (n >>> 2); // loadFactor为0.75
-                    }
-                } finally {
-                    // 1.2.2. 表初始化完成, sizeCtl用来保存新的阈值
-                    sizeCtl = sc;
-                }
-                break;
-            }
-        }
-        return tab;
-    }
+    private static final int MAXIMUM_CAPACITY = 1 << 30; 
+    private static final int DEFAULT_CAPACITY = 16;      // 默认容量
+    static final int MAX_ARRAY_SIZE;                     // 分配数组的最大尺寸(对象头8byte)    
     ```
-* 构造函数
+- 树化/反树化
     ```java
+    static final int TREEIFY_THRESHOLD = 8;
+    static final int UNTREEIFY_THRESHOLD = 6;
+    static final int MIN_TREEIFY_CAPACITY = 64;          // 桶表容量至少到64才能树化链表
+    ```
+- resize相关 //TODO
+    ```java
+    private static final int MIN_TRANSFER_STRIDE = 16;
+    private static int RESIZE_STAMP_BITS = 16;
+    private static final int MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1;
+    private static final int RESIZE_STAMP_SHIFT = 32 - RESIZE_STAMP_BITS;
+    ```
+- 废弃
+    ```java
+    private static final int DEFAULT_CONCURRENCY_LEVEL = 16; // 并发级别-1.7遗留属性
+    private static final float LOAD_FACTOR = 0.75f;          // 构造器参数有loadFactor但不会被使用
+    ```
+
+
+sizeCtl的含义:
+- 在表分配之前, 用来保存第一次分配表的大小
+- 分配表时, 用来作为分配表的信号量
+- 在表分配以后, 用来保存阈值
+- sizeCtl == 0: 表示取默认大小DEFAULT_CAPACITY=16
+- sizeCtl == -1: 有线程正在创建表
+- sizeCtl > 0: 表示将要分配的表大小(分配表前); 表示表的阈值(表分配以后)
+
+
+## 实现
+### 初始化
+
+构造函数
+```java
     public ConcurrentHashMap(int initialCapacity) {
         if (initialCapacity < 0)
             throw new IllegalArgumentException();
         
         // sizeCtl和实际容量cap 为 RoundToPower2( initialCapacity / (2/3) )
         int cap = ((initialCapacity >= (MAXIMUM_CAPACITY >>> 1)) ?
-                   MAXIMUM_CAPACITY :
-                   tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
+                    MAXIMUM_CAPACITY :
+                    tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
         
         // 在表创建之前, sizeCtl用来保存第一次分配表的大小
         this.sizeCtl = cap;
     }
 
     public ConcurrentHashMap(int initialCapacity,
-                             float loadFactor, int concurrencyLevel) 
+                                float loadFactor, int concurrencyLevel) 
         
         if (!(loadFactor > 0.0f) || initialCapacity < 0 || concurrencyLevel <= 0)
             throw new IllegalArgumentException();
@@ -89,9 +80,47 @@ ConcurrentHashMap
             MAXIMUM_CAPACITY : tableSizeFor((int)size);
         this.sizeCtl = cap;
     }
-    ```
-* put
-    ```java
+```
+
+初始化表
+```java
+/**
+    初次分配表
+*/
+private final Node<K,V>[] initTable() {
+    Node<K,V>[] tab; int sc;
+    // 1. 循环尝试, 直到自己创建成功或者其它线程创建成功
+    while ((tab = table) == null || tab.length == 0) {
+        // 1.1. sizeCtl == -1 表示其它线程正在创建, 只要yield就可以了
+        if ((sc = sizeCtl) < 0)
+            Thread.yield(); 
+
+        // 1.2. cas 抢 sizeCtl, 抢到设为-1; 抢到sizeCtl以后要再检查一次有没初始化
+        else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+            try {
+                if ((tab = table) == null || tab.length == 0) {
+
+                    // 1.2.1. 根据原sizeCtl来确定容量大小
+                    int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
+                    @SuppressWarnings("unchecked")
+                    Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
+                    table = tab = nt;
+                    sc = n - (n >>> 2); // loadFactor为0.75
+                }
+            } finally {
+                // 1.2.2. 表初始化完成, sizeCtl用来保存新的阈值
+                sizeCtl = sc;
+            }
+            break;
+        }
+    }
+    return tab;
+}
+```
+
+### put
+
+```java
     public V put(K key, V value) {
         return putVal(key, value, false);
     }
@@ -355,9 +384,10 @@ ConcurrentHashMap
         assert checkInvariants(root);
         return null;
     }
-    ```
-* 扩容
-    ```java
+```
+
+### 扩容
+```java
         /**
      * Adds to count, and if table is too small and not already
      * resizing, initiates transfer. If already resizing, helps
@@ -676,4 +706,4 @@ ConcurrentHashMap
         }
     }
     //[1] 该结点用来通知访问结点的线程, 该桶已经成功迁移到nextTable
-    ```
+```
