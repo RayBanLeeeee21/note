@@ -1,40 +1,60 @@
 问题
-*  UNSAFE.putOrderedObject(ss, SBASE, s0); 的语义
+- `UNSAFE.putOrderedObject(ss, SBASE, s0)`
+    - 以`putOrderedsObject()`的方式put的时候, 结果不是立即可见, 但是保证顺序
 
 ConcurrentHashMap
-* 特性:
-    * key/value不能为null (HashMap可以)
-* HashEntry
-    * 域    
-        * final K key: key不可更改, 改了可能永远无法找到结点
-        * final int hash: key不可更改, 则hash也不可更改
-        * volatile V value
-        * volatile HashEntry<K,V> next
-* 默认属性:
-    * DEFAULT_INITIAL_CAPACITY = 16
-    * DEFAULT_LOAD_FACTOR = 0.75
-    * DEFAULT_CONCURRENCY_LEVEL = 16
-    * MIN_SEGMENT_TABLE_CAPACITY = 2 (实际分配时, segment的表大小默认为2, 表大小总和为32)
-* 相关属性计算
-    1. ssize(segment的个数): 
-        * 不小于concurrencyLevel的2的幂                 // 为了方便用 & 操作来求余
-        * 不超过MAX_SEGMENTS = 1<<16, 高位留给segment;  
-    2. 初始容量
-        * 不超过MAXIMUM_CAPACITY = 1<<30    
-    3. segment容量
-        * roundToPowerOf2(initCap / ssize)             // 为了方便用 & 操作来求余
-        * 不小于MIN_SEGMENT_TABLE_CAPACITY = 2          
-    ```java
+- 特性:
+    - key/value不能为null (HashMap可以): 如果支持null, 则`containsKey()`会带来歧义
+    - `Segment`是`ReentranLock`的子类
+        - `put()`的时候不直接`lock()`, 而是`tryLock()`到一定次数再`lock()`
+    - 每个`Segment`的桶表独立扩展
+- 默认属性:
+    - 容量:
+        ```java
+        /** 默认初始化容量
+            - 指全部segment加起来的. 
+            - 但是分下去segment以后, 还会取整为2的幂, 并且不能小于MIN_SEGMENT_TABLE_CAPACITY
+        */
+        static final int DEFAULT_INITIAL_CAPACITY = 16;                                                        
+        static final float DEFAULT_LOAD_FACTOR = 0.75f;     // 默认负载因子
+        ```
+    - segment:
+        ```java
+        static final int DEFAULT_CONCURRENCY_LEVEL = 16;    // 默认segment数
+        static final int MAX_SEGMENTS = 1 << 16;            // 最大segment数
+        static final int MIN_SEGMENT_TABLE_CAPACITY = 2;    // segment中table最小值
+        ```
+    - retries: 
+        ```java
+        static final int RETRIES_BEFORE_LOCK = 2;           // contains()/size()方法中上锁之前重试的次数
+        ```
+
+
+初始化
+1. `ssize`: segment的个数
+    - 不小于concurrencyLevel的2的幂 - 为了方便用`&`操作来求余
+    - 不超过`MAX_SEGMENTS`(即 1<<16)  
+2. `initCap`: 初始容量
+    - 不超过MAXIMUM_CAPACITY = 1<<30
+3. `cap`: segment的表容量
+    - `cap = Math.max(roundToPowerOf2(initCap / ssize), MIN_SEGMENT_TABLE_CAPACITY)`
+    
+
+### 方法实现
+
+#### 初始化
+
+```java
     public ConcurrentHashMap(int initialCapacity,
                              float loadFactor, int concurrencyLevel) {
         if (!(loadFactor > 0) || initialCapacity < 0 || concurrencyLevel <= 0)
             throw new IllegalArgumentException();
 
-        // 并发级别不能高于1<<16
+        // 1. 计算并发级别: 不高于 1 << 16
         if (concurrencyLevel > MAX_SEGMENTS)
             concurrencyLevel = MAX_SEGMENTS;
         
-        // 实际并发级别ssize为不小于conccurencyLevel的2的幂
+        // 并发级别取整为2的幂
         int sshift = 0;
         int ssize = 1;
         while (ssize < concurrencyLevel) {
@@ -45,11 +65,11 @@ ConcurrentHashMap
         this.segmentShift = 32 - sshift;
         this.segmentMask = ssize - 1;
 
-        // 初始容量不超过 MAXIMUM_CAPACITY = 1<<30
+        // 2. 计算初始容量
         if (initialCapacity > MAXIMUM_CAPACITY)
             initialCapacity = MAXIMUM_CAPACITY;
 
-        // segment容量不小于 ceil(initCap / ssize) 的2的幂
+        // 3. 计算segment中表容量
         int c = initialCapacity / ssize;
         if (c * ssize < initialCapacity)
             ++c;
@@ -57,16 +77,69 @@ ConcurrentHashMap
         while (cap < c)
             cap <<= 1;
 
-        // 创建第0个segment, 这个segment给其它segment的创建当参考
+        // ...
+    }
+```
+
+### 初始化Segment和数组
+
+初始segment与segment数组
+1. 先在构造器中创建`segment[0]`, 以保存一些容量参数
+2. 在`put()`的时候懒加载创建其它`segment`, 以**双检查 + volatile读写 + 循环CAS**的方法保证线程安全
+
+```java
+public ConcurrentHashMap(int initialCapacity,
+                             float loadFactor, int concurrencyLevel) {
+        // ...
+
+        // segments 和 segments[0]要先创建, 供后面其它segment的创建进行参考
         Segment<K,V> s0 =
             new Segment<K,V>(loadFactor, (int)(cap * loadFactor),
                              (HashEntry<K,V>[])new HashEntry[cap]);
         Segment<K,V>[] ss = (Segment<K,V>[])new Segment[ssize];
-        UNSAFE.putOrderedObject(ss, SBASE, s0); // 非volatile写
+        UNSAFE.putOrderedObject(ss, SBASE, s0);     // 没必要volatile
         this.segments = ss;
     }
-    ```
-* put
+```
+
+```java
+    /**
+        创建Segment: 双检查 + 循环CAS实现
+            - 对数组和segment的读取必须要用volatile
+    */
+    private Segment<K,V> ensureSegment(int k) {     // k为segment索引
+        final Segment<K,V>[] ss = this.segments;
+        long u = (k << SSHIFT) + SBASE; 
+        Segment<K,V> seg;
+
+        // 双检查-1 + volatile读
+        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
+
+            // 参照第0个segment的参数, 创建新表(相对耗时间)
+            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
+            int cap = proto.table.length;
+            float lf = proto.loadFactor;
+            int threshold = (int)(cap * lf);
+            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
+
+            // 双检查-2 + volatile读
+            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                == null) { // recheck
+                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
+
+                // 循环CAS尝试 + volatile写
+                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                       == null) {
+                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
+                        break;
+                }
+            }
+        }
+        return seg;
+    }
+```
+
+#### put
     ```java
     public V put(K key, V value) {
         Segment<K,V> s;
@@ -86,44 +159,10 @@ ConcurrentHashMap
         return s.put(key, hash, value, false);
     }
 
-    /**
-        volatile读+双检查确认segment的存在, 并以循环volatile读 & CAS写入的方式创建segment
-    */
-    private Segment<K,V> ensureSegment(int k) {
-        final Segment<K,V>[] ss = this.segments;
-        long u = (k << SSHIFT) + SBASE; 
-        Segment<K,V> seg;
-
-        // volatile读确认是否存在
-        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
-            // 参照第0个segment的参数, 创建新表(相对耗时间)
-            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
-            int cap = proto.table.length;
-            float lf = proto.loadFactor;
-            int threshold = (int)(cap * lf);
-            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
-
-            // 第二次volatile读检查
-            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
-                == null) { // recheck
-                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
-
-                // 循环做 volatile读+CAS写
-                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
-                       == null) {
-                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
-                        break;
-                }
-            }
-        }
-        return seg;
-    }
-
     //
     final V put(K key, int hash, V value, boolean onlyIfAbsent) {
 
-        // 循环CAS尝试取得锁, 多次不成功再以阻塞方式获取. 
-        // 循环尝试之前先顺便找一下结点, 不存在则创建新结点
+        // 找结点并尝试上锁
         HashEntry<K,V> node = tryLock() ? null :
             scanAndLockForPut(key, hash, value);
 
@@ -153,7 +192,7 @@ ConcurrentHashMap
                 }
                 // key不存在
                 else {
-                    // 先检查新结点的准备情况
+                    // 检查要不要创建结点
                     if (node != null)
                         node.setNext(first);
                     else
@@ -178,39 +217,38 @@ ConcurrentHashMap
     }
 
     
-
+    // 找结点, 找到后重试上锁, 并且随时检查一下头结点有没变
     private HashEntry<K,V> scanAndLockForPut(K key, int hash, V value) {
+
         // volatile读取segment对应位置的首结点
         HashEntry<K,V> first = entryForHash(this, hash);    
-        HashEntry<K,V> e = first;                           // 滑动指针
+        HashEntry<K,V> e = first;
         HashEntry<K,V> node = null;
         int retries = -1; 
         while (!tryLock()) {
             HashEntry<K,V> f; 
+
+            // 阶段1: 找结点 - 每个迭代tryLock()一次, 移动指针一次, 
+                // 直到找到结点或确认不存在
             if (retries < 0) {
 
-                // 在segment的指定链表, 查找到了尾部都没找到key对应结点, 则新建结点
                 if (e == null) {
                     if (node == null) 
                         node = new HashEntry<K,V>(hash, key, value, null);
-                    // 确认没找到结点, 才开始记录尝试取锁的次数
                     retries = 0;
                 }
-                // 找到结点也要开始记录尝试取锁的次数
                 else if (key.equals(e.key))
                     retries = 0;
                 else
-                    e = e.next;
+                    e = e.next; // 指针向前
             }
-            // 超过尝试次数, 以阻塞的方式等待锁
+            // 阶段2: 重试64次 tryLock()
             else if (++retries > MAX_SCAN_RETRIES) {
                 lock();
                 break;
             }
-            // 超出次数之前, 每两次循环用volatile读检查一下首结点有没更新
-            // 有的话, 要重新搜索, 重新尝试, 重新计数
-            else if ((retries & 1) == 0 &&
-                        (f = entryForHash(this, hash)) != first) {
+            // 隔两次重试检查一次头结点有没改变, 变了则回到阶段1重找
+            else if ((retries & 1) == 0 && (f = entryForHash(this, hash)) != first) {
                 e = first = f; 
                 retries = -1;
             }
@@ -218,6 +256,7 @@ ConcurrentHashMap
         return node;
     }
 
+    // 拆分链表, 然后换新的table
     private void rehash(HashEntry<K,V> node) {
         // 计算新容量, 更新table和threshold
         HashEntry<K,V>[] oldTable = table;
@@ -274,8 +313,11 @@ ConcurrentHashMap
         table = newTable;
     }
     ```
-* get方法
-    ```java
+
+#### get
+
+`get()`时不上锁
+```java
     public V get(Object key) {
         Segment<K,V> s; 
         HashEntry<K,V>[] tab;
@@ -290,8 +332,8 @@ ConcurrentHashMap
 
             // 以volatile方式读取hash值对应的链表首结点, 并在链表中查找
             for (HashEntry<K,V> e = (HashEntry<K,V>) UNSAFE.getObjectVolatile
-                     (tab, ((long)(((tab.length - 1) & h)) << TSHIFT) + TBASE);
-                 e != null; e = e.next) {
+                        (tab, ((long)(((tab.length - 1) & h)) << TSHIFT) + TBASE);
+                    e != null; e = e.next) {
                 K k;
                 if ((k = e.key) == key || (e.hash == h && key.equals(k)))
                     return e.value;
@@ -299,13 +341,15 @@ ConcurrentHashMap
         }
         return null;
     }
-    ```
-* remove方法
+```
+#### remove
     ```java
     /**
         Object value: value为null时或者value匹配时才删除
     */
     final V remove(Object key, int hash, Object value) {
+
+        // 尝试上锁
         if (!tryLock())
             scanAndLock(key, hash);
         V oldValue = null;
@@ -348,6 +392,7 @@ ConcurrentHashMap
         return oldValue;
     }
 
+    // 不会返回结点, 但可以预热缓存
     private void scanAndLock(Object key, int hash) {
         // volatile读获取首结点
         HashEntry<K,V> first = entryForHash(this, hash);
@@ -355,20 +400,19 @@ ConcurrentHashMap
         int retries = -1;
         while (!tryLock()) {
             HashEntry<K,V> f;
-            // 先查找结点
+            // 阶段1: 找结点 - 每个迭代tryLock()一次, 移动指针一次
             if (retries < 0) {
                 if (e == null || key.equals(e.key))
                     retries = 0;
                 else
                     e = e.next;
             }
-            // 找到结点或者找到表尾才开始计数. 
-            // 尝试次数过多, 阻塞等待锁
+            // 阶段2: 循环tryLock()直到达到64次后阻塞
             else if (++retries > MAX_SCAN_RETRIES) {
                 lock();
                 break;
             }
-            // 每两次循环检查一下首结点有没被更新
+            // 每两次循环检查一下首结点有没被更新, 更新了要重新找
             else if ((retries & 1) == 0 &&
                         (f = entryForHash(this, hash)) != first) {
                 e = first = f;

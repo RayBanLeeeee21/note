@@ -5,6 +5,7 @@
 ## 推荐
 - java
     - [LongAdder底层实现 - Striped64](./basic-courses/lang/java/jdk1.8/java.util.concurrent/atomic/Striped64.md)
+    - [ConcurrentHashMap-1.7](./basic-courses/lang/java/jdk1.8/java.util.concurrent/ConcurrentHashMap17.md)
     - [Channel](./basic-courses/lang/java/jdk1.8/java.util.nio/Channel.md)
 - Spring
     - [Spring boot启动 - SpringApplication.run](./frameworks/spring/topics/spring%20boot%20启动过程/ch01%20spring%20boot启动%20-%20SpringApplication.run.md)
