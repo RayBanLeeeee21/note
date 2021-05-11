@@ -17,6 +17,7 @@ sentinel可用命令
 - `PING`: 探测主从服务器时用到
 - `UNSUBSCRIBE`/`SUBSCRIBE`/`PUNSUBSCRIBE`/`PSUBSCRIBE`/`PUBLISH`/: 感知其它sentinel用到
 - `INFO`: 获取主从服务器信息时用到
+- `SENTINEL`: 故障检测与选举时用到
 
 
 数据结构
