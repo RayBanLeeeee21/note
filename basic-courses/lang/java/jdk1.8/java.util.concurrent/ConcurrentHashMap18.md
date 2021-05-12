@@ -37,30 +37,28 @@
     ```
 
 
-sizeCtl的含义:
-- 在表分配之前, 用来保存第一次分配表的大小
-- 分配表时, 用来作为分配表的信号量
-- 在表分配以后, 用来保存阈值
-- sizeCtl == 0: 表示取默认大小DEFAULT_CAPACITY=16
-- sizeCtl == -1: 有线程正在创建表
-- sizeCtl > 0: 表示将要分配的表大小(分配表前); 表示表的阈值(表分配以后)
-
+sizeCtl的多重语义:
+- 表不存在: 表示第一次初始化的容量
+    - 特殊值0表示取`DEFAULT_CAPACITY=16`
+- 创建表: 线程通过`CAS(sizeCtl, old, -1)`竞争建表机会, 结束后再改成新的扩容阈值
+- 存在表: 表示扩容阈值, 其中`Integer.MAX_VALUE`表示无法再扩容
 
 ## 实现
 ### 初始化
 
-构造函数
+构造函数: 一开始不初始化表, 只计算初始的表大小
+- 先用初始容量除以因子0.75, 再向上取整为2的幂
+
 ```java
     public ConcurrentHashMap(int initialCapacity) {
         if (initialCapacity < 0)
             throw new IllegalArgumentException();
         
-        // sizeCtl和实际容量cap 为 RoundToPower2( initialCapacity / (2/3) )
+        // 先不初始化, 只记录初始表大小: 除以因子0.75, 再向上取整为2的幂
+            // 调用者期望达到 initialCapacity 之前不扩容, 因此要先除以0.75
         int cap = ((initialCapacity >= (MAXIMUM_CAPACITY >>> 1)) ?
                     MAXIMUM_CAPACITY :
                     tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
-        
-        // 在表创建之前, sizeCtl用来保存第一次分配表的大小
         this.sizeCtl = cap;
     }
 
@@ -71,10 +69,11 @@ sizeCtl的含义:
             throw new IllegalArgumentException();
         
         // 给定初始容量不能小于并发级别
-        if (initialCapacity < concurrencyLevel)   // Use at least as many bins
-            initialCapacity = concurrencyLevel;   // as estimated threads
+        if (initialCapacity < concurrencyLevel)
+            initialCapacity = concurrencyLevel;
 
-        // sizeCtl和实际表容量cap 为 RoundToPowerOf2( initialCapacity / loadFactor )
+        // 先不初始化, 只记录初始表大小: 除以因子0.75, 再向上取整为2的幂
+            // 调用者期望达到 initialCapacity 之前不扩容, 因此要先除以0.75
         long size = (long)(1.0 + (long)initialCapacity / loadFactor);
         int cap = (size >= (long)MAXIMUM_CAPACITY) ?
             MAXIMUM_CAPACITY : tableSizeFor((int)size);
@@ -82,25 +81,29 @@ sizeCtl的含义:
     }
 ```
 
-初始化表
+初始化表: 对表做双检查 + sizeCtl自旋锁
+- 与1.7的区别: 
+    - 1.7只有一个竞争对象(segment), 而1.8有两个竞争对象()
+    - 1.7为Segment创建表时, 经过双检查的第一次检查后, 可能出现多个线程同时创建, 然后cas竞争设置新表 
+    - 1.8中如果有线程正在创建, 其它线程可以通过`sizeCtl==-1`感知到有线程正在创建, 只需一直`yield()`
+
+
 ```java
-/**
-    初次分配表
-*/
 private final Node<K,V>[] initTable() {
     Node<K,V>[] tab; int sc;
-    // 1. 循环尝试, 直到自己创建成功或者其它线程创建成功
+    // 1. 循环尝试
     while ((tab = table) == null || tab.length == 0) {
+
         // 1.1. sizeCtl == -1 表示其它线程正在创建, 只要yield就可以了
         if ((sc = sizeCtl) < 0)
             Thread.yield(); 
 
-        // 1.2. cas 抢 sizeCtl, 抢到设为-1; 抢到sizeCtl以后要再检查一次有没初始化
+        // 1.2. cas竞争建表机会
         else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
             try {
-                if ((tab = table) == null || tab.length == 0) {
 
-                    // 1.2.1. 根据原sizeCtl来确定容量大小
+                // 1.2.1 双检查, 防止表发生了变化, 确认没有再建表
+                if ((tab = table) == null || tab.length == 0) {
                     int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
                     @SuppressWarnings("unchecked")
                     Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
@@ -108,7 +111,7 @@ private final Node<K,V>[] initTable() {
                     sc = n - (n >>> 2); // loadFactor为0.75
                 }
             } finally {
-                // 1.2.2. 表初始化完成, sizeCtl用来保存新的阈值
+                // 1.2.3 释放锁
                 sizeCtl = sc;
             }
             break;
