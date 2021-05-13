@@ -32,11 +32,22 @@ AQS的域:
 - 头结点: 头结点是**空结点**, 不保存数据
 - 实现:
     - 入队 & 出队: 循环CAS尝试将tail指向新结点, 然后再改原结点的next指针. 出队尾类似
-    - 
+    
+
 
 ## 2. 实现
 
 ### 2.1 创建结点入队
+
+入队关键:
+-   ```java
+    node.pre = tail;            // 1. 这一步可能有其它线程也做这个尝试
+    casTail(oldTail, node);     // 2. cas
+    oldTail.next = node;        // 3. 只有成功的线程可以把oldTail.next指向新的tail
+    ```
+- 问题
+    - Q: 为什么不能先cas替换tail? 
+        - A: 有线程会从tail向前遍历. 如果先把tail改成了node, 那遍历的线程无法从tail往前找
 
 ```java
     private Node addWaiter(Node mode) {
@@ -162,7 +173,7 @@ AQS的域:
             do {
                 node.prev = pred = pred.prev;
             } while (pred.waitStatus > 0);
-            pred.next = node;
+            pred.next = node;                   // 这里如果pred可能会变成CANCELLED, 下次还是可以检查出来
         } 
         
         // 3. 需要让前续结点承诺会唤醒自己
@@ -174,67 +185,86 @@ AQS的域:
     }
 ```
 
-#### 2.2.1 cancelAcquire() - 取消获取资源
+#### 2.2.1 cancelAcquire() & unparkSuccessor()
+
+这两个方法可以是整个AQS中最难理解的方法, 其难点在于高并发的情况下还要从链表的中间清理结点, 同时保证不会有沉睡结点被遗漏
 
 `cancelAcquire()`: 在发生**超时**或**中断**时, 放弃获取资源时调用, 主要包括
-- 清理当前结点前面的CANCELLED结点
-- 通知或者让前续结点通知后续结点
-- 清理自己的结点
+- 清理当前结点及前面一片连续的CANCELLED结点
+    - 先让pre指针通路绕过CANCELLED结点
+    - 再更改next指针通路
+    - 改pre通路时会改若干次`node.pre`, 但只需要改一次`pred.next`
+- 自己通知或者让前续结点通知最靠前的沉睡结点
 
-**清理CANCELLED结点时为什么不会竞争**: 
-- 注意到: 只有执行完清理后, 线程才会设置自己结点的状态为`CANCELLED`
-- 假设:
-    - 结点B正在执行`cancelAcquire()`的清理过程
-    - A为B的某个前续结点
-    - C为B的某个后续结点
-- 推演: 
-    1. A与B并发执行`cancelAcquire()`: 
-        1. `A.state == CANCELLED`: 说明A已经做过清理了, 不会再与B竞争清理
-        2. `A.state != CANCELLED`: A清理时只会清理自己前面的结点, 而B的清理范围会被A挡住, 不会与B有重复的清理范围
-    2. B与C并发执行`cancelAcquire()`:
-        - B的清理未完成, 其状态不可能是`CANCELLED`, 而C的清理范围会被A挡住
-- 结论: 清理时不会有并发问题
+
+竞争条件:
+- `prev`指针: 
+    - step-2中, 每个结点只有一个线程会修改`node.prev`
+    - 虽然`pred.prev`结点的prev被赋给`node.prev`可能马上就变了, 如`A->B`
+    - 但线程下次迭代的时候仍然可以通过prev指针通路遍历到`B`
+    - 所以对`prev`指针的修改能保证**结果一致**
+- `next`指针:
+    - 考虑连续的结点`A->B->C`
+        - 当`B`在`cancelAcquire()`把自己标记为CANCELLED时, 其查找到的pred为`A`
+        - 此时`C`也失效, 在`cancelAcquire()`把自己标记为CANCELLED, 其查找到的pred也是`A`
+        - 因此对结点`next`指针的修改是**存在并发**, 可能会被错误地指向一个CANCELLED结点
+- **如何保证不遗漏沉睡结点**
+    - 虽然结点的`pred.next`指针可能指向一个CANCELLED结点
+    - 但是pred线程执行`unparkSuccessor()`方法, 检查到`next`指向失效节点时, 会从tail向前遍历, 找到最前面的沉睡结点
 
 ```JAVA
     private void cancelAcquire(Node node) {
         // Ignore if node doesn't exist
         if (node == null) return;
 
-        node.thread = null;
+        // step-1. 去掉thread代表cancelAcquire过程开始了
+        node.thread = null;     
 
-        // 清理: 顺手清理掉自己前面一片连续的CANCELLED结点
+        // step-2. 清理: 使pre指针通路(从node开始)绕过node及其前面的一片失效结点
+            // next指针通路仍然经过失效结点
         Node pred = node.prev;
-        while (pred.waitStatus > 0)
-            node.prev = pred = pred.prev;
+        while (pred.waitStatus > 0) 
+            node.prev = pred = pred.prev;   // 注意到, 自始至终只有一个线程在修改node.prev
+                                            // pred.prev被赋给node.prev后, 可能会被其它线程更改, 如A变成B
+                                            // 但当前线程下次迭代时还是通过prev通路遍历到B
 
 
-        Node predNext = pred.next;
+        // pred是从当前结点往前找到的第1个有效结点 (当前线程认为pred有效, 但pred在后面仍可能失效)
+        Node predNext = pred.next;  // predNext后面cas用到
 
-        // 将当前结点设为取消, 其它线程会跳过该节点 (一定要清理完才可以设置CANCELLED)
+        // step-3. 将当前结点设为取消, 保证其它线程会让pre通路绕过该结点
+            // 一定要在step-2清理后才设置, 这样才能保证线程更新pre指针时的线程安全
         node.waitStatus = Node.CANCELLED;
 
-        // 如果自己是尾结点(没有后续结点), 则要自己清理自己
-        if (node == tail && compareAndSetTail(node, pred)) { // 如果刚好有新结点进来导致CAS失败, 则让后续结点清理自己
+        // step-4. 清理: 使next指针通路(从pred开始)绕过node及其前面的一片失效结点
+            // step-2中可能会多次更改node.pre, 但step-4只改一次pred.next
+            // step-2中只有一个线程会写node.pre, 但step-4可能会有多个线程找到同一个pred, 然后竞争修改pred.next
 
-            // 只要变成了CANCELLED, 就有可能被另一个线程并发清理掉, 因此必须CAS
+        // 如果自己是尾结点, 则要负责更新tail
+        if (node == tail && compareAndSetTail(node, pred)) { // 与addWaiter()线程竞争
+
+            // 既和addWaiter()线程竞争, 又和cancelAcquire()线程竞争
             compareAndSetNext(pred, predNext, null);
         }else {
 
-            // 前续结点: 尝试把前续结点设为SIGNAL, 以保证唤醒下个结点
+            // 尝试让pred通知后面的结点
+                // 以下3个检查是确定pred的线程有能力唤醒后续结点
             int ws;
-            if (pred != head &&
-                ((ws = pred.waitStatus) == Node.SIGNAL ||
+            if (pred != head &&                             // 1. head结点没有线程, 不能唤醒下个结点
+                ((ws = pred.waitStatus) == Node.SIGNAL ||   // 2. 确认ws是SIGNAL, 或者可以改成SIGNAL
                  (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) && // 可能被另一个线程改成 CANCELLED
-                pred.thread != null) {
+                pred.thread != null) {                      // 3. 最后一次检查pred的线程是否有效 
+                                                                // 线程进入cancelAcquire()/setHead()方法时才会清理thread
+                                                                // 该条件说明pred的线程要退出acquire()了, 可能没法通知后续结点
 
-                // CAS尝试清理自己
+                // 即使通过前面3个检查, pred的线程依然可能进入cancelAcquire()/setHead()而错过通知node的后续结点
+                    // 不过pred线程在unparkSuccessor()方法有保底方案 - pred线程发现其后结点(node)已失效, 然后从tail往前找失效结点
+                    // 不过大多数情况下还是可以在这里成功让pred.next连到下个结点上
                 Node next = node.next;
-                if (next != null && next.waitStatus <= 0)
-                    compareAndSetNext(pred, predNext, next);
+                if (next != null && next.waitStatus <= 0) compareAndSetNext(pred, predNext, next);
             } 
-            
-            // 否则直接唤醒下个结点. 下个结点会清理掉自己
             else {
+                // 自己来唤醒后续结点. 而后续结点会负责把自己和前面的CANCELLED结点清理掉
                 unparkSuccessor(node);
             }
 
@@ -243,7 +273,11 @@ AQS的域:
     }
 ```
 
-#### 2.2.2 unparkSuccessor() - 唤醒后续结点
+unparkSuccessor() - 唤醒后续结点: 该方法在以下三种情况下被调用到
+- 取消获取资源 - `cancelAcquire()`方法
+- `release()`
+- `doReleaseShared()`
+    - 该方法会在`doAcquiredShared()`系列中获取到资源时或者`releaseShared()`方法中被调用到
 
 ```java
     private void unparkSuccessor(Node node) {
@@ -252,14 +286,14 @@ AQS的域:
          * to clear in anticipation of signalling.  It is OK if this
          * fails or if status is changed by waiting thread.
          */
-        // 不懂为什么没有必要改还去改
+        // ??? 不懂为什么没有必要改还去改
         int ws = node.waitStatus;
         if (ws < 0) compareAndSetWaitStatus(node, ws, 0);
 
-        // 从后往前遍历找最靠近node的, 可以唤醒的结点
-            // 这样可以避开被CANCELLED的, 被唤醒的结点也会把CANCELLED结点清理掉
+        // 不能确定node.next是沉睡结点时, 需要从tail往前找最前面的沉睡结点
         Node s = node.next;
-        if (s == null || s.waitStatus > 0) {
+        if (s == null               // 1. 不一定是没有next, 可能新tail刚加进来还没更改oldTail.next, 所以要检查
+            || s.waitStatus > 0) {  // 2. 下个结点失效了, 需要从tail往前
             s = null;
             for (Node t = tail; t != null && t != node; t = t.prev)
                 if (t.waitStatus <= 0)
@@ -316,9 +350,9 @@ AQS的域:
                 // 1. 检查自己是否第一结点, 是的话出队, 传播通知其它结点, 然后返回
                 final Node p = node.predecessor();
                 if (p == head) {
-                    int r = tryAcquireShared(arg);
+                    int r = tryAcquireShared(arg);      
                     if (r >= 0) {
-                        setHeadAndPropagate(node, r);   // 传播唤醒其它结点
+                        setHeadAndPropagate(node, r);   // 传播唤醒其它结点. 注意传播范围可能是有限的, r==0时就不会再传播
                         p.next = null; // help GC
                         failed = false;
                         return true;
@@ -354,7 +388,7 @@ AQS的域:
         setHead(node);
 
         // 以下情况传播唤醒后续结点
-            // 1. propagate > 0 表示前面 tryAcquireShared()成功
+            // 1. propagate == 0 时不再继续往前传播. 该特性在Semaphore中
             // 2. 前续结点为空
         if (propagate > 0 || h == null || h.waitStatus < 0 ||
             (h = head) == null || h.waitStatus < 0) {
@@ -373,8 +407,7 @@ AQS的域:
                 // SIGNAL 表示后续结点需要被唤醒, 唤醒下个结点
                     // 后续结点会被连锁地唤醒
                 if (ws == Node.SIGNAL) {
-                    if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
-                        continue;            // loop to recheck cases
+                    if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0)) continue;            // loop to recheck cases
                     unparkSuccessor(h);
                 }
 
@@ -400,3 +433,12 @@ AQS的域:
         return false;
     }
 ```
+
+## 3. 问题
+
+问题:
+- Q: 如果共享结点和独占结点共存于队列上时, 如何区分共享和独占结点, 以唤醒正确的结点?
+    - A: 结点不需要知道下个结点是共享还是独占结点, 它只需要知道自己在`acquire()`成功时要不要唤醒下个结点
+        - 共享结点在`doAcquireShared()`中获取资源成功后马上会在`setHeadAndPropagate()`执行`unparkSuccessor()`唤醒后续结点
+        - 而独占结点在`queuedAcquire()`中获取资源成功后不会唤醒后续结点, 只有在`release()`时才会
+        - 共享结点如果在获取资源成功后, `unpark()`了下个独占结点, 独占结点也会在`tryAcquire()`时失败, 从而再次进入`park()`
