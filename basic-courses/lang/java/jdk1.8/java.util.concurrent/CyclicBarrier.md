@@ -1,17 +1,14 @@
 ## CyclicBarrier
 
-
-
 CyclicBarrier
-* 特点:
-    * 一个中断/异常, 其它都broken
-    * reset后或者barrierCommand异常时, 所有线程broken
-    * barrierCommand由最后一个await()的线程执行
-    * 多个线程同时被中断时, 只有最后抢到锁的线程能抛出中断, 其它非中断线程broken, 而中断的线程broken+interrupted
-* 与CountDownLatch相比
-    * CyclicBarrier可重复使用
-    * 到达以后可以调用command.run()
-*   源代码
+- 特点:
+    - `barrierCommand`由最后一个`await()`的线程执行
+    - 多个线程同时同时被中断时, 只有最先收到中断的线程能抛出中断异常, 其它则先清理中断标志, 再抛`BrokenBarrierException`
+    - 一个线程发生`await()`超时/`reset()`/`barrierCommand`运行异常时, 其它线程都`BrokenBarrierException`
+- 与CountDownLatch相比
+    - CyclicBarrier可重复使用
+    - 到达以后可以调用command.run()
+-   源代码
     ```java
 
     /**
@@ -66,12 +63,10 @@ CyclicBarrier
             // 取得当前年代
             final Generation g = generation;
 
-            // 如果年代已经broken, 抛异常         
-            if (g.broken)
-                throw new BrokenBarrierException();
+            // 检查broken - 检查是否有其它线程breakbarrier()
+            if (g.broken) throw new BrokenBarrierException();
 
-            // 如果发生中断, 抛中断异常 (可能会触发其它线程的BrokenBarrierException) 
-            // 清除中断标志
+            // 检查中断 - 发生中断则breakBarrier()告诉其它线程
             if (Thread.interrupted()) {
                 breakBarrier();
                 throw new InterruptedException();
@@ -85,15 +80,14 @@ CyclicBarrier
                 try {
                     // 如果有barrierCommand, 执行barrierCommand
                     final Runnable command = barrierCommand;
-                    if (command != null)
-                        command.run();
+                    if (command != null) command.run();
                     ranAction = true;
 
                     // 只有在完全成功的时候才会换代
                     nextGeneration();
                     return 0;
                 } finally {
-                    // 如果barrierCommand发生了异常
+                    // 如果barrierCommand发生了异常, 也要breakBarrier()
                     if (!ranAction)
                         breakBarrier();
                 }
@@ -102,34 +96,31 @@ CyclicBarrier
             // 循环阻塞
             for (;;) {
 
-                // 阻塞或计时阻塞
                 try {
-                    if (!timed)
-                        trip.await();
-                    else if (nanos > 0L)
-                        nanos = trip.awaitNanos(nanos);
+                    // 阻塞或计时阻塞
+                    if (!timed) trip.await();
+                    else if (nanos > 0L) nanos = trip.awaitNanos(nanos);
+
                 } catch (InterruptedException ie) {         //检查中断
 
-                    // 发生中断时, 如果没换代, 而且没有broken
+                    // 发生中断时, 如果没换代, 也没有其它线程比自己先breakBarrier, 那就自己breakBarrier
+                        // 然后抛出断异常
                     if (g == generation && ! g.broken) {
                         breakBarrier();
                         throw ie;
                     } else {
-                        // 已经发生换代, 不能抛中断异常(中断异常留给下一代), 只能给线程的中断标志置位 (不能影响新的年代)
-                        // 这种情况发生在两个线程同时interrupted, 其中一个先完成nextGeneration()的情况 
+                        // 换代了就不应该影响新的年代, 清除中断标志后, 跑到下面去抛BrokenBarrierException
                         Thread.currentThread().interrupt();
                     }
                 }
 
-                // 检查broken
-                if (g.broken)
-                    throw new BrokenBarrierException();
+                // 检查broken - 检查是否有其它线程breakbarrier()
+                if (g.broken) throw new BrokenBarrierException();
 
-                // 已经换代, 直接退出
-                if (g != generation)
-                    return index;
+                // 检查换代 - 换代了就不应该影响新的年代
+                if (g != generation) return index;
 
-                // 如果超时, 抛出超时异常
+                // 检查超时 - 如果超时, 抛出超时异常
                 if (timed && nanos <= 0L) {
                     breakBarrier();
                     throw new TimeoutException();
