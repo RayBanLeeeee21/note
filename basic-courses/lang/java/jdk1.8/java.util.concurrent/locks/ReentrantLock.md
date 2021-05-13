@@ -1,5 +1,7 @@
 # ReentrantLock
 
+先验知识
+- [AQS](./AbstractQueuedSynchronizer-v2.0.md)
 ## 非公平锁
 
 尝试上锁
