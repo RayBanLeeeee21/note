@@ -7,6 +7,7 @@
     - JUC系列
         - [LongAdder底层实现 - Striped64](./basic-courses/lang/java/jdk1.8/java.util.concurrent/atomic/Striped64.md)
         - [ConcurrentHashMap-1.7](./basic-courses/lang/java/jdk1.8/java.util.concurrent/ConcurrentHashMap17.md)
+        - [**ConcurrentHashMap-1.8**](./basic-courses/lang/java/jdk1.8/java.util.concurrent/ConcurrentHashMap18.md)
         - [AQS](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/AbstractQueuedSynchronizer-v2.0.md)
         - [ReentrantLock](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/ReentrantLock.md)
     - NIO

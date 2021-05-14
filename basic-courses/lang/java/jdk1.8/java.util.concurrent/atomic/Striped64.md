@@ -359,15 +359,19 @@ T3: core-1: thread-a: if (cells[0].cas(old, newVal))
         }
     }
     ```
-    在这段代码中, 比较令人费解的是``wasUncontended``与``collide``两个标志, 这两个标志的作用比较类似, 都是"**一次性**"的标志, 用来记录线程冲突的升级:  
-    * ``unUncontented`` (翻译为"无发生竞争的")
-      * 该标志是在进入``longAccumulate()``方法之前确定的, ``unUncontented==false``表示已知发生过``Cell.cas()``失败
-      * 在循环中, 如果``unUncontented==false``, 该标志会先被翻转, 然后线程更新其探针值, 做第一次rehash, 尝试另选一个空的slot, 避开原来冲突的slot
-      * 如果第一次rehash后选中的slot还是存在其它线程创建的Cell, 就只能接受与其它线程共用Cell
-    * ``collide`` (翻译为"碰撞")
-      * 线程与其它线程共用Cell以后, 如果发生``Cell.cas``失败, 则会清除该标志位, 然后更新线程探针值, 做第二次rehash, 再次尝试避开冲突的slot
-      * 如果还是``Cell.cas``失败, 就只能尝试扩容Cell表, 并且期望后面重新选择的slot没有其它线程占用 (``collide``标志再被清除掉)
-
+    在这段代码中, 比较令人费解的是`wasUncontended`(无竞争)与`collide`(碰撞)两个标志, 这两个标志的作用比较类似, 都是"**一次性**"的标志, 用来记录线程冲突的升级:  
+    - `wasUncontended`: 其反义词"contented"表示线程跟其它线程定位到了同一个Cell上, **但还没直接cas竞争过**
+      - 如果在进入`longAccumulate()`方法之前发生了cas, 线程就能知道跟其它线程竞争Cell了, 然后就会传参数`Uncontended=false`
+      - 在循环中, 如果`!wasUncontended`, 那这一轮直接放弃cas尝试, 更新线程的探针值(`advanceProbe()`), 期望换到一个空的slot上
+      - **一次性**: 只能放弃一次CAS. 如果换个位置还有发生竞争, 说明线程比较多, 只能接受竞争了
+    - `collide`: 指一个线程跟另一个线程对同一个`Cell`进行cas竞争时失败(发生碰撞)了
+      - 在`!collide`的情况下发生了CAS失败, 会触发一次`advanceProbe()`
+      - **一次性**: 因**CAS碰撞**而修改探针值的机会也只有一次. 执行完一次后, 下次再发生竞争, 就只能期望通过扩容数组来避开竞争了
+        - 与`wasUncontended`不同的是, 每当有可能发生数组创建/扩容的时候, 线程都会乐观地认为下次可能不会碰撞, 从而清除`collide`标志
+        - 因此`collide`的生命周期是跟数组关联的, 只在数组的生命周期范围内是一次性的
+    - 数组容量上限: 数组容量不会超过NCPU数. 
+        - 真正并行的线程数不会超过NCPU
+        - 如果数组也到上限了, 那只能每次CAS失败都通过`advanceProbe()`换一个Cell (打一枪换一个位置)
 
 ## 整体解读
 ```java
@@ -493,7 +497,7 @@ final void longAccumulate(long x, LongBinaryOperator fn,
                 break;
         }
 
-        /* 未抢到创建Cell表的资格 -> 循环对base做cas */
+        /* 未抢到创建Cell表的资格 -> 循环对base做cas(避免等待数组的创建) */
         else if (casBase(v = base, ((fn == null) ? v + x :
                                     fn.applyAsLong(v, x))))
             break;

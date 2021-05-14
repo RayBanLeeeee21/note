@@ -33,7 +33,7 @@
 - 废弃
     ```java
     private static final int DEFAULT_CONCURRENCY_LEVEL = 16; // 并发级别-1.7遗留属性
-    private static final float LOAD_FACTOR = 0.75f;          // 构造器参数有loadFactor但不会被使用
+    private static final float LOAD_FACTOR = 0.75f;          // 构造器参数有loadFactor但不会被使用, 实际通过移位实现
     ```
 
 
@@ -42,6 +42,18 @@ sizeCtl的多重语义:
     - 特殊值0表示取`DEFAULT_CAPACITY=16`
 - 创建表: 线程通过`CAS(sizeCtl, old, -1)`竞争建表机会, 结束后再改成新的扩容阈值
 - 存在表: 表示扩容阈值, 其中`Integer.MAX_VALUE`表示无法再扩容
+
+
+结点hash的多重语义: 结点hash不仅用来表示
+- `hash < 0`:
+    - `hash = MOVED    (-1)`: 正在做迁移
+    - `hash = TREEBIN  (-2)`: 红黑树根结点
+    - `hash = RESERVED (-3)`: 保留结点
+        - 在`compute[IfAbsent]()`方法中, 不一定会插入新结点(随compute结点而定), 因此会通过一个临时结点`ReservationNode`占位
+        - 如果插入了新结点, `ReservationNode`会被替换成`Node`或`TreeNode`
+- `hash > 0`: 普通链表结点`Node`的头结点. 
+    - 只有这种情况下头结点可以承载kev-value, 其余情况下头结点都是无数据的哨兵结点
+    - `HASH_BITS = 0x7fffffff`: 前面可知hash<0时有特殊意义
 
 ## 实现
 ### 初始化
@@ -54,8 +66,9 @@ sizeCtl的多重语义:
         if (initialCapacity < 0)
             throw new IllegalArgumentException();
         
-        // 先不初始化, 只记录初始表大小: 除以因子0.75, 再向上取整为2的幂
+        // 计算初始表大小: 除以因子0.75, 再向上取整为2的幂
             // 调用者期望达到 initialCapacity 之前不扩容, 因此要先除以0.75
+            // 先不初始化, 只记录
         int cap = ((initialCapacity >= (MAXIMUM_CAPACITY >>> 1)) ?
                     MAXIMUM_CAPACITY :
                     tableSizeFor(initialCapacity + (initialCapacity >>> 1) + 1));
@@ -72,8 +85,9 @@ sizeCtl的多重语义:
         if (initialCapacity < concurrencyLevel)
             initialCapacity = concurrencyLevel;
 
-        // 先不初始化, 只记录初始表大小: 除以因子0.75, 再向上取整为2的幂
+        // 计算初始表大小: 除以因子0.75, 再向上取整为2的幂
             // 调用者期望达到 initialCapacity 之前不扩容, 因此要先除以0.75
+            // 先不初始化, 只记录
         long size = (long)(1.0 + (long)initialCapacity / loadFactor);
         int cap = (size >= (long)MAXIMUM_CAPACITY) ?
             MAXIMUM_CAPACITY : tableSizeFor((int)size);
@@ -86,7 +100,6 @@ sizeCtl的多重语义:
     - 1.7只有一个竞争对象(segment), 而1.8有两个竞争对象()
     - 1.7为Segment创建表时, 经过双检查的第一次检查后, 可能出现多个线程同时创建, 然后cas竞争设置新表 
     - 1.8中如果有线程正在创建, 其它线程可以通过`sizeCtl==-1`感知到有线程正在创建, 只需一直`yield()`
-
 
 ```java
 private final Node<K,V>[] initTable() {
@@ -123,6 +136,15 @@ private final Node<K,V>[] initTable() {
 
 ### put
 
+put()
+- 保证线程安全: `put()`中既有自旋乐观锁, 也有synchronize
+    - 乐观锁: 通过一个大循环来尝试多个乐观锁, 只要有一个失败就返回原点重试
+        - `initTable()`尝试初始化桶表: 参考[初始化](#初始化)小节
+        - 初始化头结点: 在确认表创建成功后再使用循环+cas尝试创建头结点, 失败则重新开始循环
+    - 悲观锁
+        - 前两步确定表和头结点都存在时, 再对头结点上锁, 再进行插入
+        - `addCount()`检查扩容时也会上悲观锁
+
 ```java
     public V put(K key, V value) {
         return putVal(key, value, false);
@@ -138,16 +160,15 @@ private final Node<K,V>[] initTable() {
 
         // 2. 循环尝试
         for (Node<K,V>[] tab = table;;) {
-            Node<K,V> f; int n, i, fh;      // f: 头结点; n: 数组长度; i: 桶id; fh: first.hash
+            Node<K,V> f; int n, i, fh;      // f(irst): 头结点; n: 数组长度; i: 桶id; fh: first.hash
 
             // 2.1. 检查tab是否存在, 不存在先initTable
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
 
-            // 2.2. 非CAS读快速检查桶数组是否为空, 是则尝试CAS写入新结点, 失败则回到2重新尝试
+            // 2.2. volatile读确认头结点不存在时, cas尝试插入头结点, 成功后返回, 失败则重新循环
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
-                if (casTabAt(tab, i, null,
-                             new Node<K,V>(hash, key, value, null)))
+                if (casTabAt(tab, i, null, new Node<K,V>(hash, key, value, null)))
                     break;                   
             }
             // 2.3. 表正在被迁移, 去参与迁移
@@ -159,10 +180,11 @@ private final Node<K,V>[] initTable() {
                 // 2.4. 搜索结点, 搜索之前要锁表头结点
                 synchronized (f) {
                     
-                    // 2.4.1. 如果表头已经改变, 下次循环再尝试
+                    // 2.4.1. 进入互斥临界区一定要先重检查头结点有没发生变化
+                        // 失败则回到循环起点
                     if (tabAt(tab, i) == f) {
                         
-                        // 2.4.1.1 桶为链表, 在链表中寻找结点位置
+                        // 2.4.1.1 hash > 0 表示是链表
                         if (fh >= 0) {
                             binCount = 1;
                             for (Node<K,V> e = f;; ++binCount) {
@@ -177,7 +199,7 @@ private final Node<K,V>[] initTable() {
                                         e.val = value;
                                     break;
                                 }
-                                // 2.4.1.1.2 未找到结点则继续往下找
+                                // 2.4.1.1.2 未找到结点则继续往下找, 确认没有就插入尾结点然后返回
                                 Node<K,V> pred = e;
                                 if ((e = e.next) == null) {
                                     pred.next = new Node<K,V>(hash, key,
@@ -192,8 +214,7 @@ private final Node<K,V>[] initTable() {
                             Node<K,V> p;
                             binCount = 2;
                             
-                            if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
-                                                           value)) != null) {
+                            if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key, value)) != null) {
                                 oldVal = p.val;
                                 if (!onlyIfAbsent)
                                     p.val = value;
@@ -202,7 +223,7 @@ private final Node<K,V>[] initTable() {
                     }
                 }
 
-                // 2.5 链表长度超过TREEIFY_THRESHOLD, 转成树
+                // 2.5 链表长度超过TREEIFY_THRESHOLD, 转成树. 该过程会再次上锁
                 if (binCount != 0) {
                     if (binCount >= TREEIFY_THRESHOLD)
                         treeifyBin(tab, i);
@@ -213,39 +234,41 @@ private final Node<K,V>[] initTable() {
             }
         }
         
-        // 3. 计数
+        // 3. 计数, 可能发生扩容
         addCount(1L, binCount);
         return null;
     }
 
+```
+### 红黑树
 
+链表转树. 转之前要通过**双检查锁**来竞争头结点, 竞争成功再建表
+```java
+    /** 双检查锁头结点 */
     private final void treeifyBin(Node<K,V>[] tab, int index) {
         Node<K,V> b; int n, sc;
-        // 1. 检查表, 表存在才能treeify
+        
         if (tab != null) {
-            // 1.1. 表容量达到MIN_TREEIFY_CAPACITY = 64才真正转成红黑树, 否则只是数组扩容
+            // 1. 表容量未达到MIN_TREEIFY_CAPACITY = 64时只做数组扩容
             if ((n = tab.length) < MIN_TREEIFY_CAPACITY)
                 tryPresize(n << 1);
-            // 1.2 头结点是否存在, 则抢表头结点
+
+            // 2. 确认结点存在, 并且是链表状态
             else if ((b = tabAt(tab, index)) != null && b.hash >= 0) {
                 synchronized (b) {
-                    // 1.2.1 抢到还要再检查一次表头有没被更新
-                    // 只有删除才可能改变头结点, 删完不用更新
-                    // 如果删除完还有新线程加入结点, 那就由新线程来treeifyBin
+                    // 2.1 双检查头结点. 
+                        // 如果发生过变化, 则说明有线程抢先一步, 因此可以直接退出
                     if (tabAt(tab, index) == b) {
+
                         TreeNode<K,V> hd = null, tl = null;
-                        // 1.2.1.1 复制链表, 新链表的结点为TreeNode
+                        // 2.1.1 复制出一条TreeNode链表(TreeNode也有next指针)
                         for (Node<K,V> e = b; e != null; e = e.next) {
-                            TreeNode<K,V> p =
-                                new TreeNode<K,V>(e.hash, e.key, e.val,
-                                                  null, null);
-                            if ((p.prev = tl) == null)
-                                hd = p;
-                            else
-                                tl.next = p;
+                            TreeNode<K,V> p = new TreeNode<K,V>(e.hash, e.key, e.val, null, null);
+                            if ((p.prev = tl) == null) hd = p;
+                            else tl.next = p;
                             tl = p;
                         }
-                        // 1.2.1.2 建树, 并放到对应的桶
+                        // 2.1.2 把TreeNode链表转成树后放到位置上
                         setTabAt(tab, index, new TreeBin<K,V>(hd));
                     }
                 }
@@ -256,7 +279,7 @@ private final Node<K,V>[] initTable() {
     /**
         TreeBin继承自Node(这样才能放到table中)
         hash设为TREEBIN(-1)表示是TreeBin
-        与putTreeVal的区别是, 不用检查key是否存在
+        其过程与putTreeVal()相似, 区别在于不用检查key是否存在(全都不存在)
     */
     TreeBin(TreeNode<K,V> b) {
         // 1. hash 设为 TREEBIN = -2
@@ -389,7 +412,26 @@ private final Node<K,V>[] initTable() {
     }
 ```
 
-### 扩容
+红黑树建立过程:
+![红黑树](../java.util(collection)/RBTree.jpg)
+
+### 结点计数器 & 扩容
+
+结点的计数器也是线程安全的, 其机制类似于[LongAdder](./atomic/LongAdder.md)
+- `baseCount`: 基础计数器, 只有没发生过线程冲突就一直在`baseCount`上计数
+- `counterCells`: 计数器数组. 
+    - 通过线程探针值(一种hash, 参考[ThreadLocalRandom](./ThreadLocalRandom.md))取余来决定线程要将新值加到哪个cell, 以此避免多个线程竞争同一个cell
+    - `CounterCell`类加了`@Contended`注解, 通过缓存行填充来避免缓存行**伪共享**问题
+        ```java
+        @sun.misc.Contended static final class CounterCell {
+            volatile long value;
+            CounterCell(long x) { value = x; }
+        }
+        ```
+
+计数器部分原理与[LongAdder](./atomic/LongAdder.md)几乎一致. `fullAddCount()`部分的解读可以直接跳过, 直接参考LongAdder.
+
+结点计数与扩容实现: 
 ```java
         /**
      * Adds to count, and if table is too small and not already
@@ -410,25 +452,27 @@ private final Node<K,V>[] initTable() {
     private final void addCount(long x, int check) {
         CounterCell[] as; long b, s;            // CounterCell只有一个用来保存count的域(volatile long)
 
-        // 1. 没有线程私有counter或者全局counter计数失败, 尝试1.1给线程私有counter计数
+        // 1. couterCells未初始化说明未发生过竞争, 直接cas尝试加到baseCount上, 成功就到2去检查扩容
         if ((as = counterCells) != null ||
             !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) { 
             CounterCell a; long v; int m;
             boolean uncontended = true;
 
-            // 1.1 尝试给线程私有count计数
-            if (as == null || (m = as.length - 1) < 0 ||                        // 1. count表为空
-                (a = as[ThreadLocalRandom.getProbe() & m]) == null ||           // 2. 线程指针与其它线程冲突, 导致counter在同一个位置
-                !(uncontended =
-                  U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {    // 3. 存在竞争(cas尝试计数失败)
+            // 1.1 尝试给线程私有counter计数
+            if (as == null || (m = as.length - 1) < 0 ||                        // 1. counterCells未初始化 -> 在fullAddCount()中初始化
+                (a = as[ThreadLocalRandom.getProbe() & m]) == null ||           // 2. 线程对应的counter未初始化 -> 在fullAddCount()中初始化
+                !(uncontended =                                                 // 3. counter冲突 -> 自旋尝试增加计数值
+                  U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {    
+
                 // 1.1.1 线程私有计数器计数失败, 则fullAddCount
+                    // fullCount有三个作用: 创建counterCells, 创建counter, 自旋尝试增加计数值
                 fullAddCount(x, uncontended);                                   
                 return;
             }
-            // 1.2. 不检查resize()则直接返回, 
-            if (check <= 1)
-                return;
-            // 1.3. 如果要检查resize(), 则要汇总线程私有计数器的和
+            // 1.2. 不检查resize()则直接返回
+            if (check <= 1) return;
+
+            // 1.3. 如果要检查resize(), 则要拿到结点个数(size())
             s = sumCount(); // 计算所有count的和
         }
 
@@ -464,8 +508,132 @@ private final Node<K,V>[] initTable() {
             }
         }
     }
-    // [1] A thread' s "probe" value is a non-zero hash code that (probably) does not collide with other existing threads with respect to any power of two collision space. When it does collide, it is pseudo-randomly adjusted (using a Marsaglia XorShift)
-    // 线程探针, 可理解成线程独有的一个随机数, 
+
+    // 该过程与Striped64.longAccumulate()方法几乎一致
+    private final void fullAddCount(long x, boolean wasUncontended) {
+
+        // 为线程初始化探针值, 初始化完就不会再改
+        int h;
+        if ((h = ThreadLocalRandom.getProbe()) == 0) {
+            ThreadLocalRandom.localInit();      // force initialization
+            h = ThreadLocalRandom.getProbe();
+            wasUncontended = true;
+        }
+
+        // 通过一个for循环来承载多个乐观锁
+        boolean collide = false;                // True if last slot nonempty
+        for (;;) {
+            CounterCell[] as; CounterCell a; int n; long v;
+
+            // 1. 表已存在
+            if ((as = counterCells) != null && (n = as.length) > 0) {
+
+                // 1.1 线程对应的counter未初始化, 尝试初始化counter
+                if ((a = as[(n - 1) & h]) == null) {
+
+                    // 双检查乐观锁 - 抢到cellsBusy的线程可以创建counterCells数组或单个counter
+                    if (cellsBusy == 0) {            // Try to attach new Cell
+                        CounterCell r = new CounterCell(x); // Optimistic create
+
+                        // 第二次检查并cas竞争cellsBusy
+                        if (cellsBusy == 0 && U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                            boolean created = false;
+                            try {               // Recheck under lock
+
+                                // 抢到锁还得重新检查counterCells数组和单个counter
+                                CounterCell[] rs; int m, j;
+                                if ((rs = counterCells) != null &&
+                                    (m = rs.length) > 0 &&
+                                    rs[j = (m - 1) & h] == null) {
+                                    rs[j] = r;
+                                    created = true;
+                                }
+                            } finally {
+                                // 释放乐观锁
+                                cellsBusy = 0;
+                            }
+                            // 成功创建了cell就退出循环.
+                            if (created) break;
+
+                            // 否则失败(重检查时可能发现cell已经有了)就要回到循环的起点开始
+                            continue;
+                        }
+                    }
+                    collide = false;
+                }
+                // 知道自己跟其它线程竞争counter了, 就放弃cas, 直接跑到下面去advanceProbe(), 期望换到一个空的slot上创建counter
+                else if (!wasUncontended) 
+                    wasUncontended = true; // 只能放弃一次cas, 第一次就会把标志清掉, 使下次强制CAS竞争
+
+                // cas竞争counter, 成功后离开
+                else if (U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))
+                    break;
+                // 如果有线程正在扩容, 或者已经到扩容上限了, 就只能每次都清理collide标志
+                    // 即是说每次失败都会advanceProbe(), 然后再尝试CAS (打一枪换一个地方)
+                else if (counterCells != as || n >= NCPU)
+                    collide = false;            // At max size or stale
+
+                // CAS失败了, 跑到下面advanceProbe(), 期望换个counter可以成功
+                else if (!collide)
+                    collide = true;  // 清除标志, 下次再失败就尝试扩容counterCells
+                
+                // 期望通过扩容counterCells来减少冲突
+                else if (cellsBusy == 0 &&
+                         U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                    try {
+
+                        // 重新确认 counterCells 未变化
+                        if (counterCells == as) {// Expand table unless stale
+                            CounterCell[] rs = new CounterCell[n << 1];
+                            for (int i = 0; i < n; ++i)     // 迁移结点
+                                rs[i] = as[i];
+                            counterCells = rs;
+                        }
+                    } finally {
+
+                        // 释放锁
+                        cellsBusy = 0;
+                    }
+                    collide = false;
+                    continue;                   // Retry with expanded table
+                }
+                h = ThreadLocalRandom.advanceProbe(h);
+            }
+
+            // 2. counterCells不存在 - 双检查乐观锁竞争cellsBusy, 成功后创建counterCells及线程的counter
+            else if (cellsBusy == 0 && counterCells == as &&
+                     U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                boolean init = false;
+                try {                           
+                    // 重新确认counterCells未被修改
+                    if (counterCells == as) {
+                        CounterCell[] rs = new CounterCell[2];
+                        rs[h & 1] = new CounterCell(x);
+                        counterCells = rs;
+                        init = true;
+                    }
+                } finally {
+
+                    // 释放锁
+                    cellsBusy = 0;
+                }
+
+                // 成功后退出循环
+                if (init) break;
+
+                // 否则回到循环起点重新开始尝试
+            }
+            // 3. 未抢到创建counterCells的机会 - 只能将增量加到baseCount上(避免等待数组的创建)
+            else if (U.compareAndSwapLong(this, BASECOUNT, v = baseCount, v + x))
+                break;                          // Fall back on using base
+        }
+    }
+    
+```
+
+
+
+```java
 
     /**
      * Helps transfer if a resize is in progress.
