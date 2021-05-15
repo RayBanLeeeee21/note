@@ -25,7 +25,7 @@
     ```
 - resize相关 //TODO
     ```java
-    private static final int MIN_TRANSFER_STRIDE = 16;
+    private static final int MIN_TRANSFER_STRIDE = 16;                           // strip最小单位
     private static int RESIZE_STAMP_BITS = 16;
     private static final int MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1; // 参与迁移的最大线程数(0xffff)
     private static final int RESIZE_STAMP_SHIFT = 32 - RESIZE_STAMP_BITS;
@@ -738,7 +738,7 @@ put()
      */
     private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
         int n = tab.length, stride;
-        if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE)
+        if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE) // 根据NCPU计算STRIP, 分下来每个核迁移8个slot
             stride = MIN_TRANSFER_STRIDE; // subdivide range
 
         // 检查nextTable是否初始化过
