@@ -27,7 +27,7 @@
     ```java
     private static final int MIN_TRANSFER_STRIDE = 16;
     private static int RESIZE_STAMP_BITS = 16;
-    private static final int MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1;
+    private static final int MAX_RESIZERS = (1 << (32 - RESIZE_STAMP_BITS)) - 1; // 参与迁移的最大线程数(0xffff)
     private static final int RESIZE_STAMP_SHIFT = 32 - RESIZE_STAMP_BITS;
     ```
 - 废弃
@@ -40,13 +40,14 @@
 sizeCtl的多重语义:
 - 表不存在: 表示第一次初始化的容量
     - 特殊值0表示取`DEFAULT_CAPACITY=16`
-- 创建表: 线程通过`CAS(sizeCtl, old, -1)`竞争建表机会, 结束后再改成新的扩容阈值
+- 创建表/扩容: 线程通过`CAS(sizeCtl, old, -1)`竞争建表机会, 结束后再改成新的扩容阈值
 - 存在表: 表示扩容阈值, 其中`Integer.MAX_VALUE`表示无法再扩容
 
 
 结点hash的多重语义: 结点hash不仅用来表示
 - `hash < 0`:
     - `hash = MOVED    (-1)`: 正在做迁移
+        - `ForwardingNode`结点的hash值为MOVE, 该结点用于在迁移时在旧表中迁移完成的slot中进行占位, 并且可以告诉访问线程到哪去找`nextTable`
     - `hash = TREEBIN  (-2)`: 红黑树根结点
     - `hash = RESERVED (-3)`: 保留结点
         - 在`compute[IfAbsent]()`方法中, 不一定会插入新结点(随compute结点而定), 因此会通过一个临时结点`ReservationNode`占位
@@ -482,11 +483,14 @@ put()
             // 2.1 超出阈值, 要进行迁移
             while (s >= (long)(sc = sizeCtl) && (tab = table) != null &&
                    (n = tab.length) < MAXIMUM_CAPACITY) {
-                // 假设tab.length 前面 有10个零,
-                // 则resize标志, 为 0x0000800A
+
+                // rs = Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1))
+                    // RESIZE_STAMP_BITS = 16
+                    // 假设tab.length 前面 有10个零, 则resizeStamp计算结果为 0x0000800A
+                    // resizeStamp对应迁移时sizeCtrl的高16位
                 int rs = resizeStamp(n);                                            
                 if (sc < 0) {
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 迁移标志被撤, 迁移已完成
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 未进行迁移或者正在进行其它轮的迁移
                         || sc == rs + 1                      
                         || sc == rs + MAX_RESIZERS 
                         || (nt = nextTable) == null         // nextTable被撤, 迁移已完成
@@ -497,9 +501,9 @@ put()
                         transfer(tab, nt);
                 }
 
-                // 自己尝试发起迁移
-                //     sc第1位为0表示正在迁移, 2-16位用来表示迁移的轮次 
-                //     后16位用来记录参与迁移的线程数
+                // 自己尝试发起迁移, 把sizeCtrl改成小于0的值
+                //     高2-16位用来表示迁移的轮次 
+                //     低16位用来记录参与迁移的线程数
                 //     争夺成功则sizeCtl改成0x800A0000
                 else if (U.compareAndSwapInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
@@ -640,16 +644,22 @@ put()
      */
     final Node<K,V>[] helpTransfer(Node<K,V>[] tab, Node<K,V> f) {
         Node<K,V>[] nextTab; int sc;
-        // 表不为空 && 再次检查首结点为ForwardingNode结点 && nextTabl
-        if (tab != null && (f instanceof ForwardingNode) &&
-            (nextTab = ((ForwardingNode<K,V>)f).nextTable) != null) {
+        // 保守检查:
+            // 1. 表不为空
+            // 2.首结点为ForwardingNode结点表示在做迁移 
+            // 3. nextTable不为空表示在做迁移
+        if (tab != null 
+            && (f instanceof ForwardingNode) 
+            && (nextTab = ((ForwardingNode<K,V>)f).nextTable) != null) {
+
             int rs = resizeStamp(tab.length);
+
             while (nextTab == nextTable && table == tab &&
                    (sc = sizeCtl) < 0) {
                 // 如果没有迁移结束就要参与迁移
                 if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 迁移结束
-                    || sc == rs + 1 
-                    || sc == rs + MAX_RESIZERS          // 满员
+                    || sc == rs + 1                     // ???
+                    || sc == rs + MAX_RESIZERS          // ???
                     || transferIndex <= 0)              // stripe已被分配完
                     break;
                 // 尝试参与迁移
@@ -674,7 +684,7 @@ put()
         int sc;
         while ((sc = sizeCtl) >= 0) {
             Node<K,V>[] tab = table; int n;
-            // 如果桶数组为空, 初始化桶数组
+            // 分支1: 桶数组未初始化的话, 要先初始化, 然后重新开始循环
             if (tab == null || (n = tab.length) == 0) {
                 n = (sc > c) ? sc : c;
                 // 争夺sizeCtl, 取得sizeCtl时可以初始化桶数组
@@ -687,29 +697,36 @@ put()
                             sc = n - (n >>> 2);
                         }
                     } finally {
+
+                        // 释放锁
                         sizeCtl = sc;
                     }
                 }
             }
+            // 分支2: 达到最大容量, 不能再扩容, 退出
             else if (c <= sc || n >= MAXIMUM_CAPACITY)
                 break;
+
+            // 分支3: 尝试参与或发起迁移
             else if (tab == table) {
                 int rs = resizeStamp(n);
                 // 检查需不需要参与, 未完成迁移则要参与迁移
                 if (sc < 0) {
                     Node<K,V>[] nt;
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs // 1. resize标志被撤, 迁移完成
-                        || sc == rs + 1 
-                        || sc == rs + MAX_RESIZERS      
+                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs // 1. 未进行迁移或者在进行其它epoch的迁移
+                        || sc == rs + 1                   // ???
+                        || sc == rs + MAX_RESIZERS        // ???
                         || (nt = nextTable) == null       // 2. nextTable被撤, 迁移完成
                         || transferIndex <= 0)            // 3. stripe已被分配完
                         break;
-                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
-                        transfer(tab, nt);
+
+                    // resizer计数 + 1, 参与到迁移中
+                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1)) transfer(tab, nt);
                 }
-                // sizeCtl未被占有, CAS尝试占有sizeCtl, 把sizeCtl的高位设成resize标志
-                else if (U.compareAndSwapInt(this, SIZECTL, sc,
-                                             (rs << RESIZE_STAMP_SHIFT) + 2))
+                
+                // 尝试把resizeStamp标志写到sizeCtrl的高16位, 第一个发起迁移
+                    // 失败则重新循环, 可能会参与迁移
+                else if (U.compareAndSwapInt(this, SIZECTL, sc, (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
             }
         }
@@ -724,40 +741,42 @@ put()
         if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE)
             stride = MIN_TRANSFER_STRIDE; // subdivide range
 
-        // 检查nextTable是否已经被分配
+        // 检查nextTable是否初始化过
         if (nextTab == null) {            
             try {
                 @SuppressWarnings("unchecked")
                 Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n << 1];
                 nextTab = nt;
-            } catch (Throwable ex) {      // try to cope with OutOfMemoryError
+            } catch (Throwable ex) {      // 发生OutOfMemoryError, 把sizeCtrl改到最大, 表示无法再扩容
                 sizeCtl = Integer.MAX_VALUE;
                 return;
             }
             nextTable = nextTab;
             transferIndex = n;                                         // 设置第一个stripe的起点
         }
+
+
         int nextn = nextTab.length;
         ForwardingNode<K,V> fwd = new ForwardingNode<K,V>(nextTab);    //[1] 
-        boolean advance = true;
-        boolean finishing = false; 
+        boolean advance = true;                 // 只要没申请到strip, advance都为true
+        boolean finishing = false;              // 
         for (int i = 0, bound = 0;;) {
             Node<K,V> f; int fh;
 
             // 每个线程处理之前先申请stripe, 处理完一stripe再尝试申请一个stripe
-            // 处理的时候从后往前处理
+                // 处理的时候从后往前处理
             while (advance) {
                 int nextIndex, nextBound;
-                // 分配成功, 不再向前找
-                if (--i >= bound || finishing)
-                    advance = false;
 
-                // 下一个起点已经到头了, 不再向前找
+                // 手头上已经有一个strip没处理完, 不申请, 只是推进i(向前推)
+                if (--i >= bound || finishing) advance = false;
+
+                // transferIndex <= 0表示所有桶都被处理完了, 停止申请strip
                 else if ((nextIndex = transferIndex) <= 0) {
                     i = -1;
                     advance = false;
                 }
-                // cas申请一个stripe, 申请成功后, 起点向前移动一stripe, 并且为当前stripe的下界
+                // cas尝试申请一个stripe, 失败则回到while循环起点重新申请
                 else if (U.compareAndSwapInt
                          (this, TRANSFERINDEX, nextIndex,
                           nextBound = (nextIndex > stride ?
@@ -768,7 +787,7 @@ put()
                 }
             }
             
-
+            // i 已经超出范围, 开始收尾
             if (i < 0 || i >= n || i + n >= nextn) {
                 int sc;
                 // 迁移完成, 把新表赋给table    
@@ -779,12 +798,14 @@ put()
                     return;
                 }
 
+                // resizer计数 -1, 失败则回到循环起点重试
                 if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
-                    // 如果自己是最后一个完成的, 那直接返回
-                    if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)       
-                        return;
+
+                    // 如果自己是不最后一个完成的, 那直接返回
+                    if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT) return;
                     
                     // 最后一个完成的需要负责用新表替换旧表
+                        // 但这里不替换新表, 要重检查, 下个迭代再更换
                     finishing = advance = true;                                 
                     i = n; // recheck before commit
                 }
@@ -795,10 +816,12 @@ put()
             // 当前桶已经被成功迁移了, 向下一个走
             else if ((fh = f.hash) == MOVED)
                 advance = true; 
-            // 桶未被迁移过
+            // 桶未被迁移过, 上锁做迁移
             else {
-                // 争夺头结点, 上锁并再次检查是否有更新
+                // 头结点上锁
                 synchronized (f) {
+
+                    // 重检查确认头结点未发生变化 
                     if (tabAt(tab, i) == f) {
                         Node<K,V> ln, hn;
 
@@ -868,7 +891,7 @@ put()
                             // 加入新表
                             setTabAt(nextTab, i, ln);
                             setTabAt(nextTab, i + n, hn);
-                            setTabAt(tab, i, fwd);                              // 把fwd结点放在旧表的对应位置
+                            setTabAt(tab, i, fwd);      // 把forward结点放在旧表的对应位置, 表示在做迁移
                             advance = true;
                         }
                     }
