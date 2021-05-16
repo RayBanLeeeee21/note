@@ -10,6 +10,8 @@
         - [**ConcurrentHashMap-1.8**](./basic-courses/lang/java/jdk1.8/java.util.concurrent/ConcurrentHashMap18.md)
         - [AQS](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/AbstractQueuedSynchronizer-v2.0.md)
         - [ReentrantLock](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/ReentrantLock.md)
+        - [ThreadLocal](./basic-courses/lang/java/jdk1.8/javja.lang/ThreadLocal.md)
+        - [InheritableThreadLocal](./basic-courses/lang/java/jdk1.8/javja.lang/InheritableThreadLocal.md)
     - NIO
         - [Channel](./basic-courses/lang/java/jdk1.8/java.util.nio/Channel.md)
 - Spring
