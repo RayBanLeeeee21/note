@@ -6,6 +6,7 @@
 `Unsafe.putOrderedObject()`: 
 - 参考[知乎 - ConcurrentHashMap大量使用Unsafe的putOrderedObject出于什么考虑?](https://www.zhihu.com/question/60888757)
 > putOrderedObject是putObjectVolatile的内存非立即可见版本；lazySet是使用Unsafe.putOrderedObject方法，这个方法在对低延迟代码是很有用的，它能够实现非堵塞的写入，这些写入不会被Java的JIT重新排序指令(instruction reordering)，这样它使用快速的存储-存储(store-store) barrier, 而不是较慢的存储-加载(store-load) barrier, 后者总是用在volatile的写操作上，这种性能提升是有代价的，虽然便宜，也就是写后结果并不会被其他线程看到，甚至是自己的线程，通常是几纳秒后被其他线程看到，这个时间比较短，所以代价可以忍受。
+- store-store屏障: 第一个store命令可能未被写到内存, 但当第二个store到来时, 第一个store必须被写入内存
 
 ### 相关接口
 参考[相关接口](./相关接口.md)
@@ -30,8 +31,14 @@
         - cancel(true): `NEW -> INTERRUPTING -> INTERRUPTED`
 - 问题:
     - 为什么要区分`INTERRUPTING`和`INTERRUPTED`? 
-        - 如果只有一种中断状态, cancel线程可能刚设置完标志, 就被run线程看到并清除中断标志, 然后cancel线程又调用其中断, 造成run线程被中断而未发现
-        - 分成两个状态后, cancel线程可以保证, run()线程在看到`INTERRUPTED`时, interrupt()已经触发过
+        - 假设只有一种`INTERRUPTED`
+            1. run()线程通过`cas(runner)`抢到执行机会
+            2. cancel()线程把状态`INTERRUPTED`
+            3. run()线程看到`INTERRUPTED`, 便退出了
+            4. cancel()中断了run()线程, run()线程处于RUNNABLE状态, 完全不知道自己被中断了
+        - 分成两个状态后
+            1. cancel线程可以保证在中断了run()线程后再设置`INTERRUPTED`
+            2. run()线程在看到`INTERRUPTED`时, 再退出
 
 
 并发问题
@@ -39,15 +46,15 @@
     - **volatile** int state: 状态
         - 作为互斥量用来控制对callable, outcome的读写
     - **volatile** Thread runner: 运行callable的线程
-        - runner被作互斥量来判断任务是否开始, 开始run()的时候被设为当前线程, 运行结束被设为null
+        - 执行`run()`的线程通过尝试把`runner`设为自己, 来竞争执行机会
     - **volatile** WaitNode waitNode: 保存等待结果的线程的队列
 - 竞争关系:
     - `run()`之间: 通过乐观锁`CAS(runner)`来保证安全, 谁把`runner`设为自己谁就抢到锁
         - `set()`和`setException()`之间没有竞争关系, 是`run()`线程的不同分支
-    - `run()`与`cancel()`: 
+    - `set()`/`setException()`与`cancel()`: 
         - 通过乐观锁`CAS(state)`来保证结果(outcome)与状态的一致
         - 通过乐观锁`CAS(waiter)`队列竞争唤醒等待者的机会
-    - `run()`与`get()`:
+    - `awaitDone()`与`run()`/`set()`/`setException()`: 通过`cas(waiter)`保证不会有结点被遗漏, 以致永远无法被唤醒
         
 
 ### FutureTask源码解析
@@ -84,8 +91,7 @@
             // 有线程做了带中断的cancel, 则要yield()到中断处理结束
                 // 如果run()没有发生过sleep()/wait(), 可能没法发现中断, 没有InterruptedException
             int s = state;
-            if (s >= INTERRUPTING)
-                handlePossibleCancellationInterrupt(s); // while (INTERRUPTING) yield();
+            if (s >= INTERRUPTING) handlePossibleCancellationInterrupt(s); // while (INTERRUPTING) yield();
         }
     }
     
@@ -112,6 +118,9 @@
             finishCompletion();
         }
     }
+    ```
+- 通知等待者: `finishCompletion()`
+    ```java
 
     /**
         将waiters队列中所有等待结果的非null线程全部唤醒
@@ -120,9 +129,11 @@
         
         // 自旋锁竞争通知的机会, 抢不到(变成null)直接退出
         for (WaitNode q; (q = waiters) != null;) {
+
+            // 头结点一定要用cas, 防止某个新结点加入后, 永远获取不到通知
             if (UNSAFE.compareAndSwapObject(this, waitersOffset, q, null)) {
 
-                // 逐一唤醒等待者线程
+                // 逐一唤醒等待者线程, 并清理已通知的结点
                 for (;;) {
                     Thread t = q.thread;
                     if (t != null) {
@@ -172,8 +183,7 @@
             runner = null;
             // 被中断时, 循环yield()直到达到INTERRUPTED
             s = state;
-            if (s >= INTERRUPTING)
-                handlePossibleCancellationInterrupt(s);
+            if (s >= INTERRUPTING) handlePossibleCancellationInterrupt(s);
         }
         // 只有不出异常, 不被中断才能算成功
         return ran && s == NEW; 
@@ -219,8 +229,7 @@
         // 先等到状态达到NORMAL, EXCEPTIONAL或者INTERRUPTING, INTERRUPTED
         int s = state;
         // 还未完成, 则循环阻塞等待, 直到正常(NORMAL)或者异常结束(EXCEPTIONAL)
-        if (s <= COMPLETING)
-            s = awaitDone(false, 0L);
+        if (s <= COMPLETING) s = awaitDone(false, 0L);
         
         // 根据执行结果, 决定返回结果还是抛异常
         return report(s);
@@ -299,15 +308,19 @@
             for (;;) {          // restart on removeWaiter race
                 for (WaitNode pred = null, q = waiters, s; q != null; q = s) {
                     s = q.next;
+
+                    // 当前结点线程不为空, 找下个结点
                     if (q.thread != null)
                         pred = q;
+
+                    // 可能会造成重复清理, 但不会有遗漏
                     else if (pred != null) {
                         pred.next = s;
-                        if (pred.thread == null) // check for race
+                        if (pred.thread == null) // pred状态发生变化, 要重试
                             continue retry;
                     }
-                    else if (!UNSAFE.compareAndSwapObject(this, waitersOffset,
-                                                          q, s))
+                    // 第一个结点线程为null, 通过cas(waiters)来清理
+                    else if (!UNSAFE.compareAndSwapObject(this, waitersOffset, q, s))
                         continue retry;
                 }
                 break;
@@ -315,6 +328,11 @@
         }
     }
     ```
+    - 重复清理的例子: 
+        1. X和Y线程同时拿到`pred=A`, `p=B`
+        2. X线程拿着`pred=A`, 将其next指针改到E的时候, 切换到线程Y
+        3. Y线程拿着`pred=A`, 从`p=B`开始, 重新开始遍历`C-D-E-F`的过程
+    <img src="./FutureTask-removeWaiter-1.jpg" style="width: 30px">
 * 超时get
     ```java
     public V get(long timeout, TimeUnit unit)
