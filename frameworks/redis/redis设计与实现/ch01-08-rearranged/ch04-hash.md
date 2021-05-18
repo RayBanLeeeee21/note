@@ -1,7 +1,15 @@
-# Chapter 04 字典
+# Chapter 04 hash
 
-## 数据结构
 
+## 1. 对象编码
+
+hash:
+- hashtable: 不满足ziplist条件的都用hashtable表示
+- ziplist: `len(key) <= 64 && len(val) <= 64 && count(key) <= 512`
+
+### 1.1 hashtable
+
+数据结构
 - 字典:
     ```c++
     typedef struct dict {
@@ -41,13 +49,13 @@
         int (*keyCompare)(void *privdata, const void *key1, const void *key2);
 
         // 该类型的key复制方法
-        void *(*keyDup)(void *privdata, const void *key);
+        void *(*keyDup)(void *privdata, const void *key);   // 扩容时用到
 
         // 该类型的key回收方法
         void (*keyDestructor)(void *privdata, void *key);
 
         // /该类型的value复制方法
-        void *(*valDup)(void *privdata, const void *obj);
+        void *(*valDup)(void *privdata, const void *obj);   // 扩容时用到
 
         // 该类型的value回收方法
         void (*valDestructor)(void *privdata, void *obj);
@@ -57,11 +65,12 @@
 特点:
 - hash算法: murmurHash2
 - 链冲突解决: 字典中不保存尾指针, 因此新结点都是加到队头, 使复杂度为O(1)
-- 扩展条件: 与是否有后台保存有关
-    - 未做后台保存(BGSAVE/BGREWRITEAOF)时, 负载因子阈值为1
-    - 进行后台保存(BGSAVE/BGREWRITEAOF)时, 负载因子阈值提到5
-    - *有些系统使用copy-on-write的方式创建子进程, 为防止创建子进程后发生write, 故提高阈值, 避免发生内存的修改*
-- 收缩条件: 负载因子小于0.1
+- 扩容与收缩: 
+    - 动态路由因子: 
+        - 未做后台保存(BGSAVE/BGREWRITEAOF)时, 负载因子阈值为1
+        - 进行后台保存(BGSAVE/BGREWRITEAOF)时, 负载因子阈值提到5, 避免一边扩容一边后台线程遍历hash写文件
+            - *有些系统使用copy-on-write的方式创建子进程, 为防止创建子进程后发生write, 故提高阈值, 避免发生内存的修改*
+        - 收缩阈值: 负载因子小于0.1
 
 渐进式rehash:
 - 设计原因: 防止一次性rehash造成某个插入请求的响应时间过长(都在处理rehash)
@@ -73,13 +82,17 @@
         - 每个对字典元素的访问请求都会在两个哈希表都找一遍
         - 渐进式rehash完成后, `rehashidx`又改回-1
 
-## 应用场景
+应用场景
+- hash类型的编码之一
 - **redis数据库**
-- **hash类型**实现之一
-    - 压缩列表也是hash类型的实现之一
 
+### 1.2 ziplist
 
-## 所有操作
+参考[ziplist](./ch03-list.md##12-ziplist)
+
+## 2. 所有操作
+
+[所有操作](http://redisdoc.com/hash/index.html)(**都是原子操作**)
 
 set & get
 - `HSET key field value [field value]`

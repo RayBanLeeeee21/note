@@ -1,7 +1,14 @@
-# Chapter 05 跳跃表
 
-## 数据结构
 
+## 1. 对象编码
+
+zset:
+- skiplist
+- ziplist: `size(element) <= 64 && count(element) <= 128`
+
+### 1.1 skiplist
+
+数据结构
 - 跳跃表
     ```c++
     typedef struct zskiplist {
@@ -38,64 +45,11 @@
 - 查找方法:
     - 对于每个结点, 都要从上往下遍历层, 看哪一层可以最快跨到目标结点
 
-## 应用场景
-- 有序集合键实现
+应用场景
+- zset类型的编码之一
 - 集群结点中的内部结构
 
-## 所有操作
-
-增
-- `ZADD [NX|XX] key score member [score member ...]`: 
-    - **返回**: 有序集合长度
-
-查
-- `ZSCORE key member`:
-    - **返回**: 某个元素的分值
-- `ZCARD key`: 
-    - **返回**: zset的元素个数
-
-- `ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`
-    - 无`BYSCORE`或`BYLEX`: 返回rank范围为`[min, max]`的member列表
-    - `BYSCORE`: 返回score范围为`[min, max]`的member列表
-    - `BYLEX`: 返回member为指定范围的列表. 
-        - 匹配规则为c语言的`memcmp()`的匹配规则, 逐字符比较
-        - "["和"("分别表示闭区间和开区间, "-"和"+"表示负无穷和正无穷.
-        - **BYLEX只能对score相同的member使用, 否则结果是未定义的**
-        ```
-        ZADD zlist 1.0 10 2.0 20 3.0 30 4.0 40
-
-        ZRANGE zlist -   [40     =>     1) "10"  2) "20"  3) "30"  4) "40"
-        ZRANGE zlist (10 +       =>     1) "20"  2) "30"  3) "40"
-        ZRANGE zlist [10 [40     =>     1) "10"  2) "20"  3) "30"  4) "40"
-        ZRANGE zlist (10 [40     =>     1) "20"  2) "30"  3) "40"
-        ZRANGE zlist [10 (40     =>     1) "10"  2) "20"  3) "30"
-        ZRANGE zlist (10 (40     =>     1) "20"  2) "30"
-        ```
-    - `REV`: 倒序. 指定范围的时候, 也要写成max在前, min在后
-    - **返回**:
-        - 无`WITHSCORES`: member列表
-        - `WITHSCORES`: 由member和score组成的列表: `[m1, s1, m2, s2...]`
-- `[ZRANK|ZREVRANK] key member`: 
-    - **返回**: 某个member的rank|反向rank(即length - rank)
-- `ZCOUNT key min max`:
-    - **返回**: score范围为`[min, max]`的元素个数
-- `ZLEXCOUNT key min max`:
-    - **返回**: 返回member为指定范围的元素个数
-
-删
-- `ZREM key element [element ...]`: 删除一到多个元素
-    - **返回**: 被删的member个数
-- `ZREMRANGEBYSCORE key min max`: 根据score的范围删除
-    - **返回**: 被删除的元素个数
-- `ZREMRANGEBYRANK key min max`: 根据rank的范围删除
-    - **返回**: 被删除的元素个数
-- `ZREMRANGEBYLEX key min max`: 根据member的范围删除
-    - **返回**: 被删除的元素个数
-- `ZUNIONSTORE`
-- `ZINTERSTORE`
-// TODO
-
-## 原理解析
+#### 1.1.1 skiplist原理解析
 
 -  `zslInsert()`: 
     -  过程:
@@ -337,3 +291,62 @@
             return newnode;
         }
         ```
+### 1.2 ziplist
+
+参考[ziplist](./ch03-list.md#12-ziplist)
+
+
+## 2. 所有操作
+
+[所有操作](http://redisdoc.com/sorted_set/index.html)(**都是原子操作**)
+
+增
+- `ZADD [NX|XX] key score member [score member ...]`: 
+    - **返回**: 有序集合长度
+
+查
+- `ZSCORE key member`:
+    - **返回**: 某个元素的分值
+- `ZCARD key`: 
+    - **返回**: zset的元素个数
+
+- `ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`
+    - 无`BYSCORE`或`BYLEX`: 返回rank范围为`[min, max]`的member列表
+    - `BYSCORE`: 返回score范围为`[min, max]`的member列表
+    - `BYLEX`: 返回member为指定范围的列表. 
+        - 匹配规则为c语言的`memcmp()`的匹配规则, 逐字符比较
+        - "["和"("分别表示闭区间和开区间, "-"和"+"表示负无穷和正无穷.
+        - **BYLEX只能对score相同的member使用, 否则结果是未定义的**
+        ```
+        ZADD zlist 1.0 10 2.0 20 3.0 30 4.0 40
+
+        ZRANGE zlist -   [40     =>     1) "10"  2) "20"  3) "30"  4) "40"
+        ZRANGE zlist (10 +       =>     1) "20"  2) "30"  3) "40"
+        ZRANGE zlist [10 [40     =>     1) "10"  2) "20"  3) "30"  4) "40"
+        ZRANGE zlist (10 [40     =>     1) "20"  2) "30"  3) "40"
+        ZRANGE zlist [10 (40     =>     1) "10"  2) "20"  3) "30"
+        ZRANGE zlist (10 (40     =>     1) "20"  2) "30"
+        ```
+    - `REV`: 倒序. 指定范围的时候, 也要写成max在前, min在后
+    - **返回**:
+        - 无`WITHSCORES`: member列表
+        - `WITHSCORES`: 由member和score组成的列表: `[m1, s1, m2, s2...]`
+- `[ZRANK|ZREVRANK] key member`: 
+    - **返回**: 某个member的rank|反向rank(即length - rank)
+- `ZCOUNT key min max`:
+    - **返回**: score范围为`[min, max]`的元素个数
+- `ZLEXCOUNT key min max`:
+    - **返回**: 返回member为指定范围的元素个数
+
+删
+- `ZREM key element [element ...]`: 删除一到多个元素
+    - **返回**: 被删的member个数
+- `ZREMRANGEBYSCORE key min max`: 根据score的范围删除
+    - **返回**: 被删除的元素个数
+- `ZREMRANGEBYRANK key min max`: 根据rank的范围删除
+    - **返回**: 被删除的元素个数
+- `ZREMRANGEBYLEX key min max`: 根据member的范围删除
+    - **返回**: 被删除的元素个数
+- `ZUNIONSTORE`
+- `ZINTERSTORE`
+// TODO
