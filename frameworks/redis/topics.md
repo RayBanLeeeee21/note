@@ -29,15 +29,7 @@
     - 过期对象存储
     - 过期对象清理策略
     - 与RDB, AOF, 主从复制的关系
-- [淘汰策略](https://zhuanlan.zhihu.com/p/91539644)
-    - noeviction
-    - volatile-lru
-    - volatile-lfu
-    - volatile-random
-    - volatile-ttl
-    - allkeys-lru
-    - allkeys-lfu
-    - allkeys-random
+
 
 服务端: 
 - **事件环**(aeMain)
@@ -78,3 +70,55 @@
 - 命令: watch, multi, discard, exec
 - 完整事务执行过程
 - ACID分析
+
+## HyperLogLog
+参考
+- [基本操作-1](https://www.runoob.com/redis/redis-hyperloglog.html)
+- [走近源码：神奇的HyperLogLog](https://zhuanlan.zhihu.com/p/58519480)
+- []
+
+特点:
+- 底层结构是`SDS`
+    ```
+    127.0.0.1:6379> PFADD a 1
+    (integer) 1
+    127.0.0.1:6379> type a
+    string
+    127.0.0.1:6379> object encoding a
+    "raw"
+
+    ```
+
+## 淘汰策略
+
+参考:
+- [彻底弄懂Redis的内存淘汰策略](https://zhuanlan.zhihu.com/p/105587132)
+
+淘汰策略
+- noeviction: 不过期, 报错
+- volatile-ttl: 淘汰最早过期的一批key
+- volatile-random: 随机淘汰一批带超时的key
+- volatile-lru: 淘汰最近最少使用的一批带超时的key
+- volatile-lfu: 淘汰使用频率最少的一批带超时的key
+- allkeys-random: 随机淘汰一批key
+- allkeys-lru: 淘汰最近最少使用的一批key
+- allkeys-lfu: 淘汰使用频率最少的一批key
+
+
+LRU与LFU实现:
+- 近似LRU: 没有准确地排LRU队列, 而是随机采样多次, 每次先最久的key淘汰
+- LFU: 除了统计频率外, 还要隔一段时间对频率做递减操作
+    - `lfu-decay-time`: 以分钟为单位. 访问key时, 计算到过了N个decay, 就要减N
+    - `lfu-log-factor`: 影响增长速度的因子, factor越大, 增长越慢
+        - 计算方法  
+            ```
+            baseVal = counter - LFU_INIT_VAL
+            if (rand(0, 1)) < 1.0 / (baseVal * lfu_log_factor + 1) counter++;
+            ```
+            由公式可知counter越大越难增长, factor越大也越难增长
+
+## 缓存
+
+缓存分类: 本地, 分布式, 多级缓存
+- 一致性问题
+
