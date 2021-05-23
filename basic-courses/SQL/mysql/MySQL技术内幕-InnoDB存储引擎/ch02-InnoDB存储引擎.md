@@ -99,7 +99,9 @@ redo log的flush时机
 
 ## 2.4 Checkpoint技术
 
-持久性的实现方法-**Write Ahead Log**: 先写重做日志, 再修改页
+持久性的实现方法-**Write Ahead Log**: 先写redo log, 再将更新应用到page上
+- undo log是写在undo page上, 因此也会产生redo log
+- insert buffer记录写在insert buffer page上, 因此也会产生redo log
 
 Checkpoint解决的问题:
 - 缩短数据库恢复时间: Checkpoint之前的redo log对应的操作都已同步到磁盘, 无须再重做
@@ -156,7 +158,14 @@ Master Thread的两种循环:
 
 ## 2.6 插入缓冲
 
-// todo
+insert buffer: 插入辅助索引时减少磁盘IO
+- 适用场景: 
+    - **辅助索引**: 主键索引相对连续, 不需要这种优化
+    - **非唯一索引**: 无法立即判断同key记录是否存在
+- 过程: 
+    1. `INSERT/UPDATE/DELETE`时, 先写入insert buffer
+    2. 在一定条件下, 被merge (应用到page上) 
+
 
 ## 2.6.2 两次写
 
