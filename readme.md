@@ -19,4 +19,5 @@
     - [Spring boot - Environment](./frameworks/spring/topics/spring%20boot%20启动过程/ch02%20Environment.md)
 - 其它
     - [idea插件入门(踩坑)记录](./blogs/idea/idea插件入门(踩坑)记录.md)
+    - [手撕红黑树 - 非旋转地实现插入红黑树结点](./blogs/datastruct/手撕红黑树%20-%20非旋转地实现插入红黑树结点.md)
 - 待完善...
