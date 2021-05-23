@@ -75,10 +75,10 @@
 参考
 - [基本操作-1](https://www.runoob.com/redis/redis-hyperloglog.html)
 - [走近源码：神奇的HyperLogLog](https://zhuanlan.zhihu.com/p/58519480)
-- []
+- [Reids—神奇的HyperLoglog解决统计问题](https://mp.weixin.qq.com/s/9dtGe3d_mbbxW5FpVPDNow)
 
 特点:
-- 底层结构是`SDS`
+- 底层结构是`SDS`. 但普通string不能当HyperLogLog操作, HyperLogLog开头有个魔数`HYLL`
     ```
     127.0.0.1:6379> PFADD a 1
     (integer) 1

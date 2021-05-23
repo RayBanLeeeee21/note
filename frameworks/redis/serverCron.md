@@ -2,7 +2,7 @@
 ServerCron:
 
 - 时间相关
-    - 更新watchDog
+    - 更新watchDog (监控主循环是否卡住)
     - 更新缓存时间
     - 计算LRU
 - 内存相关
@@ -21,7 +21,7 @@ ServerCron:
     - 无后台保存任务:   
         - 检查是否有被阻塞的BGREWRITEAOF要执行
         - 检查是否要达到了RDB或AOF的同步条件, 达到则要执行
-- 
+- ...
 
 
 ```cpp
@@ -54,7 +54,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     // 参考debug.c的"Software Watchdog"
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
 
-    // 更新缓存时间
+    // 更新server内部的低精度时钟
     updateCachedTime();
 
     run_with_period(100) {
