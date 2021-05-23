@@ -57,7 +57,7 @@ Page Cleaner Thread: 刷新脏页
 - 以页为单位, 按需加载到内存中
 - 一个数据库可以有**多个缓冲池实例**, 减少竞争
 - 使用**LRU**算法管理页
-- 数据页类型:
+- 数据页类型(参考[页](ch04-表.md#424-页)):
     - 索引页
     - 数据页
     - undo页
@@ -158,13 +158,16 @@ Master Thread的两种循环:
 
 ## 2.6 插入缓冲
 
-insert buffer: 插入辅助索引时减少磁盘IO
+change buffer: 插入辅助索引时减少磁盘IO
 - 适用场景: 
     - **辅助索引**: 主键索引相对连续, 不需要这种优化
     - **非唯一索引**: 无法立即判断同key记录是否存在
 - 过程: 
-    1. `INSERT/UPDATE/DELETE`时, 先写入insert buffer
-    2. 在一定条件下, 被merge (应用到page上) 
+    1. `INSERT/UPDATE/DELETE`时, 先写入change buffer
+    2. 在一定条件下, 被merge (应用到索引上) 
+        - 有事务要读尚未merge的索引
+        - change buffer空间不够
+        - Master Thread定时触发
 
 
 ## 2.6.2 两次写
