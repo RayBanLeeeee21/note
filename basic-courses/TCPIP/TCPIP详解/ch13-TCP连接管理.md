@@ -13,10 +13,57 @@
 
 同时打开
 <br/>
+
 同时关闭
 <br/>
 
+### 13.3 TCP选项
 
+选项: 
+- 标志: 选项标志
+- 长度: 包括整个选项(即`标志+长度+值`). 
+    - `EOL`(0)和`NOP`(1)只有一个标志字段, 没有长度和值
+    - 其它标志通过长度来决定
+- 值: 取决于选项
+
+#### 13.3.1 最大段选项
+
+MSS(Max Segment Size): 最大报文段
+- 结构(伪代码): 
+    ```cpp
+    typedef struct {
+        uint8_t flag = 2;
+        uint8_t length = 4; // 整个结构大小为4byte
+        uint16_t mss;
+    } MssOpt;
+    ```
+- 取值:
+    - 典型值-1460: 加上TCP头部和IPv4头部后刚好达到链路层MTU(1500)
+    - 典型值-534: 加上TCP头部和IPv4头部后为576 byte, 是所有主机都必须支持的IP数据报大小
+    - 特殊值-65536: 与IPv6超长数据报一起表示不限大小
+- 与窗口大小的区别: 窗口大小反映的是缓冲区大小, MSS指一个报文的数据部分的最大长度
+
+#### 13.3.2 选择确认选项
+
+SACK
+- 结构(伪代码): 
+    ```cpp
+    typedef struct {
+        uint8_t flag = 3;
+        uint8_t length;             // length = (sack块个数 * 8 + 2) byte
+        struct SackBlock * blocks;  // sack块数组
+    } SackOpt;
+
+    typedef struct {                // 长度为8 byte
+        uint32_t from;
+        uint32_t to;
+    } SackBlock;
+    ```
+
+#### 13.3.3 窗口缩放选项
+
+WSCALE/WSOPT
+- 
 
 #### 13.2.3 初始序列号:
 
@@ -66,11 +113,13 @@ RST的作用
         }
         ```
         1. `l_onoff=0`: 四次挥手关闭
-        2. `l_onoff!=0, l_linger=0`:
+        2. `l_onoff!=0, l_linger=0`: 立即RST关闭
+        3. `l_onoff!=0, l_linger>0`: 在指定时间内发送完成则四次挥手, 否则RST
+            - 时间单位取决于实现, linux中为`s`
 
 
 半开连接: 一方宕机后, 另一方以为还在连接状态, 直到向另一方发消息被RST
-- 解决方法: 心跳    
+- 解决方法: 保活计时器
 
 # 13.7.4 进入连接队列
 参考:
