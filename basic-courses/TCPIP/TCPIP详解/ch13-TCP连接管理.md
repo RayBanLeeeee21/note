@@ -17,6 +17,21 @@
 同时关闭
 <br/>
 
+
+
+#### 13.2.3 初始序列号:
+
+初始序列号:
+- 问题:
+    - 如果不是随机
+        - 当前连接可能会被上一次关掉的4元组相同的连接的重复报文影响
+        - 容易受到欺骗攻击
+- 生成方法: 半随机(随机+hash)
+    - linux: 
+        - 前8位: 保密的序列号, 会随时间增加
+        - 后24位: 对时钟和4元组做加密hash: `hash(time, ipPort1, ipPort2)`
+            - 也起到SYN-cookie的作用
+
 ### 13.3 TCP选项
 
 选项: 
@@ -49,7 +64,7 @@ SACK
 - 结构(伪代码): 
     ```cpp
     typedef struct {
-        uint8_t flag = 3;
+        uint8_t flag = 5;
         uint8_t length;             // length = (sack块个数 * 8 + 2) byte
         struct SackBlock * blocks;  // sack块数组
     } SackOpt;
@@ -63,22 +78,32 @@ SACK
 #### 13.3.3 窗口缩放选项
 
 WSCALE/WSOPT
-- 
+- 结构
+    ```cpp
+    typedef struct {
+        uint8_t flag = 3;
+        uint8_t length = 3;
+        uint8_t scale;      // 值为0-14, 表示将窗口尺寸放大为2^0-2^14倍
+    } WsOpt;
+    ```
 
-#### 13.2.3 初始序列号:
+#### 13.3.4 时间戳选项与防回绕序列号
 
-初始序列号:
-- 问题:
-    - 如果不是随机
-        - 当前连接可能会被上一次关掉的4元组相同的连接的重复报文影响
-        - 容易受到欺骗攻击
-- 生成方法: 半随机(随机+hash)
-    - linux: 
-        - 前8位: 保密的序列号, 会随时间增加
-        - 后24位: 对时钟和4元组做加密hash: `hash(time, ipPort1, ipPort2)`
-            - 也起到SYN-cookie的作用
+TSOPT
+- 结构
+    ```cpp
+    typedef struct {
+        uint8_t flag = 8;
+        uint8_t length = 10;
+        uint32_t tsVal;     // 发送方给的时间戳
+        uint32_t tsEcr;     // 接收方在ACK要把时间戳原封不动放在这
 
-
+    } TsOpt;
+    ```
+- 作用:
+    - RTT估算
+    - 防回绕
+    - 重传计时器
 
 #### 13.5.2 TIME_WAIT状态
 
@@ -87,7 +112,7 @@ WSCALE/WSOPT
     - 以防被动关闭端未收到主动端的最后一个ack. 
         - 在2MSL重复收到被动关闭端的FIN时, 可以重发最后一个ACK
     - 以防下一个socket建立之前, 当前socket的被动关闭端在关闭之前发过来的报文都过期掉
-- 静默时间(MSL): 刚启动后, 创建连接必须等待MSL, 以防止上次宕机时有连接处于`TIME_WAIT`
+- 启动后的**静默时间**(MSL): 启动后, 创建连接必须等待MSL, 以防止上次宕机时有连接处于`TIME_WAIT`
 
 
 `SO_REUSEADDR`选项:
@@ -98,8 +123,10 @@ WSCALE/WSOPT
 - 对于UDP
     - 多播时允许多个socket绑定到同一个ip:port(相当于SO_REUSEPORT)
 
+#### 13.5.4 FIN_WAIT_2状态
 
-
+FIN_WAIT_2计时器
+- `inet.ipv4.tcp_fin_timeout`: 默认60s
 
 RST的作用
 - 拒绝连接: 客户端连到一个未开启的端口时, 服务端机器返回RST报文
@@ -118,19 +145,27 @@ RST的作用
             - 时间单位取决于实现, linux中为`s`
 
 
+#### 13.6.3 半开连接
+
 半开连接: 一方宕机后, 另一方以为还在连接状态, 直到向另一方发消息被RST
 - 解决方法: 保活计时器
 
-# 13.7.4 进入连接队列
+
+#### 13.6.4 时间等待错误
+
+TIME_WAIT时可能发生的错误: 一个早期的ACK被发到TIME_WAIT阶段的客户端, 导致RST提前终止. 
+- 解决方法: TIME_WAIT时对不理解的ACK不做处理, 直接丢弃
+
+#### 13.7.4 进入连接队列
 参考:
 - [TCP/IP协议中backlog参数](https://www.cnblogs.com/Orgliny/p/5780796.html)
 - [浅谈tcp socket的backlog参数](https://blog.csdn.net/qq_16399991/article/details/109389060)
+- [TCP SOCKET中backlog参数的用途是什么？ ---图解](https://www.cnblogs.com/zengkefu/p/5602396.html)
 
 队列:
-- `net.ipv4.tcp_max_sync_backlog`: SYN队列长度
-    - 默认1000
-- `net.ipv4.somaxconn`: 处于`ESTABLISH`状态, 但未被`accept()`的队列
-    - 默认128. 实际采用的长度为`min(backlog, somaxconn)` (backlog为listen()参数中传的)
+- `net.ipv4.tcp_max_syn_backlog`: `SYN_RECV`队列长度
+- `net.ipv4.somaxconn`: `ESTABLISH`队列长度 (等待用户`accept()`)
+    - 实际采用的长度为`min(backlog, somaxconn)` (backlog为listen()参数中传的)
 
 
 
