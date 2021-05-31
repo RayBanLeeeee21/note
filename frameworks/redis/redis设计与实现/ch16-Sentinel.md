@@ -58,6 +58,17 @@ sentinel可用命令
         int port;
     } sentinelAddr;
     ```
+- 关系图
+    ```mermaid
+    graph TD
+        state(setinel: sentinelState) -->|1..n| master(master1: sentinelRedisInstance)
+        master -->|1..n| sentinel(sentinel: sentinelRedisInstance)
+        master -->|1..n| slave(slave: sentinelRedisInstance)
+    ```
+    - 一个setinel管理多个master
+    - 每个master有自己的slave
+    - 每个master还有其它监视自己的若干sentinel
+
 
 sentinel与主/从机的连接
 - 命令连接
@@ -67,8 +78,8 @@ sentinel与主/从机的连接
 - 间隔: 10s
 - 命令: INFO
 - 获取: 
-    - 主机信息
-    - 主机下的从机信息
+    - 主机信息: ip:port, **状态state**, **偏移offset**, **延迟lag**, ...
+    - 从机信息: ip:port, **状态state**, **复制偏移offset**, 主从连接状态, ...
 - 更新到:
     - 主机信息: 更新到`sentinelRedisInstance`
     - 从机信息: 更新到主机的`sentinelRedisInstance->masters->slaves`
@@ -76,8 +87,8 @@ sentinel与主/从机的连接
 订阅连接
 - sentinel既订阅主/从机的``__sentinel__:hello`, 也通过该频道发布
 - 传递信息:
-    - 主/从机信息: runid, epoch, ip & port
-    - sentinel信息: runid, epoch, ip & port
+    - 主/从机信息: runid, epoch, ip:port
+    - sentinel信息: runid, epoch, ip:port
 - 更新到:
     - `sentinelRedisInstance`
     - `sentinelRedisInstance->masters->sentinels`
@@ -89,31 +100,34 @@ sentinel之间通信
 - 命令连接: 判断机器客观下线&重选主机时用到
 
 
-主观下线判断过程 
-1. 间隔1s发一次`PING`, 如果在`down-after-milliseconds`内没收到有效回复, 设为主观下线`SRI_S_DOWN`
-    - 有效回复: `+PING`, `-LOADING`, `-MASTERDOWN`
-2. 判断到主观下线后, 通过命令连接向其它sentinel询问, 发`SENTINEL is-master-down-by-addr <IP> <port> <epoch> *`
-    - 其它sentinel回复
-        ```
-        1) <down_state> 
-        2) * 
-        3) <leader_epoch>
-        ```
-3. 收集到足够的确定回复后(数量达到`sentinelRedisInstance->quorum`), 设为客观下线`SRI_O_DOWN`
+## 16.6 检测主观下线状态
 
+`SENTINEL is-master-down-by-addr <IP> <port> <epoch> <runid>`请求
+- 作用: 查询主/从机是否下线; 投票
+- 请求: 
+    - `IP & port`: 要查询的主机/从机地址
+    - `epoch`: 年代
+    - `runid`: 当需要选举时, 该参数为发起者的runid, 其余时候为"*"
+- 响应:
+    - `down_state`: 0: 未下线; 1: 已下线
+    - `leader_runid`: 投票给该runid. 非投票场景为"*"
+    - `leader_epoch`: 仅在投票时有效
+
+主观下线判断过程 
+1. **定期发`PING`(1次/s)**
+    - 在限时(`down-after-milliseconds`)内收到`PONG`则有效
+    - 未收到则标记为主观下线`SRI_S_DOWN`
+        - 有效回复: `+PING`, `-LOADING`, `-MASTERDOWN`
+2. 判断到主观下线后, 通过命令连接向其它sentinel询问, 发`SENTINEL is-master-down-by-addr <IP> <port> <epoch> *`
+3. 收集到足够的确定回复后(数量达到`sentinelRedisInstance->quorum`), 设为客观下线`SRI_O_DOWN`, 下一步进行投票过程
 
 ## 16.8 选举领头leader
 
 只有在需要故障转移时会选leader
 
 选举过程
-1. 拉票: 发`SENTINEL is-master-down-by-addr <IP> <port> <epoch> <runid>`, 其中runid是自己的, epoch为新的纪元
-2. 投票: 回复以下内容, 
-    ```
-    1) <down_state> 
-    2) <leader_runid>
-    3) <leader_epoch>
-    ```
+1. 拉票: 发`SENTINEL is-master-down-by-addr`发起投票
+2. 投票: 收到请求的sentinel回复自己要投的runid
     - 收到选票的sentinel会将该epoch中第一个拉票的选为leader, 其它的拒绝掉
 3. 如果投票失败(多个候选leader都达不到最大多数票), 则过一段时间再选举, 直到选出leader
 
