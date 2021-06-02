@@ -108,14 +108,19 @@
 LRU与LFU实现:
 - 近似LRU: 没有准确地排LRU队列, 而是随机采样多次, 每次先最久的key淘汰
 - LFU: 除了统计频率外, 还要隔一段时间对频率做递减操作
-    - `lfu-decay-time`: 以分钟为单位. 访问key时, 计算到过了N个decay, 就要减N
-    - `lfu-log-factor`: 影响增长速度的因子, factor越大, 增长越慢
-        - 计算方法  
-            ```
-            baseVal = counter - LFU_INIT_VAL
-            if (rand(0, 1)) < 1.0 / (baseVal * lfu_log_factor + 1) counter++;
-            ```
-            由公式可知counter越大越难增长, factor越大也越难增长
+    - 数据结构: 也是使用`redisObject->lfu`, 高16位表示时间, 低8表示计数(最大255)
+    - 参数:
+        - `lfu-decay-time`: 以分钟为单位. 访问key时, 计算到过了N个decay, 就要减N
+        - `lfu-log-factor`: 影响增长速度的因子, factor越大, 增长越慢
+            - 计算方法: 由公式可知counter越大越难增长, factor越大也越难增长, 还会随着时间下降
+                ```
+                baseVal = counter - LFU_INIT_VAL
+                if (rand(0, 1)) < 1.0 / (baseVal * lfu_log_factor + 1) counter++;
+                ```
+
+## 多线程
+
+[Redis 6.0 多线程IO处理过程详解](https://zhuanlan.zhihu.com/p/144805500)
 
 ## 缓存
 

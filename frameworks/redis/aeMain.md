@@ -46,7 +46,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             tvp = &tv;
         }
 
-        // sleep之前先处理一些比较急的事情, 如果回复client
+        // sleep之前先处理一些比较急的事情, 比如回复client
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP)
             eventLoop->beforesleep(eventLoop);
 

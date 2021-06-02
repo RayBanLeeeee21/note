@@ -13,7 +13,7 @@ BGSAVE互斥
 - BGSAVE过程中拒绝SAVE/BGSAVE命令, 防止竞争
 - BGSAVE过程中阻塞BGREWRITEAOF, 使其滞后执行
     - 不存在竞争, 但会影响性能
-
+- BGREWRITEAOF过程中阻塞BGSAVE
 
 ## 10.2 自动间隔性保存
 
