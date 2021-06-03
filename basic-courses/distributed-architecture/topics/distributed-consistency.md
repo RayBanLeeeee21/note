@@ -56,3 +56,4 @@
 - ZAB
     - 
 - [实例详解ZooKeeper ZAB协议、分布式锁与领导选举](https://dbaplus.cn/news-141-1875-1.html)
+- [Zab协议详解](https://blog.csdn.net/liuchang19950703/article/details/111406622)
