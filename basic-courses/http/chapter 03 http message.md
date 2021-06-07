@@ -17,10 +17,23 @@
     * OPTIONS: 获取可行的操作
 * 状态码:
     * 1xx: 信息提示
+        - 100 Continue + `Expect: 100 Continue`
     * 2xx: 成功
+        - 200 0K
+        - 202 Accepted: 请求被接受, 但还未做处理. (可能是异步完成)
+        - 204 No Content: 无Body
+        - 206 Partial Content: 配合Content-Range头使用 (1.1特性)
     * 3xx: 重定向
+        - 301 Moved Permanetly: 永久移动. 以后客户端都要去新的(从Location读URL)
+        - 307 Temporary Redirect: 暂时移动. 后续客户端还是会请求旧的
     * 4xx: 客户端错误
+        - 403 Forbidden
+        - 404 Not Found
+        - 405 Method Not Allow
+        - 406 Not Acceptable: Allow首部中不包括客户端Content-Type中的类型
     * 5xx: 服务器错误
+        - 500 Internal Server Error
+        - 502 Bad Gateway
 * 版本号(HTTP/x.y):
     * 向后兼容
     * 比较(大于): x0 > x1 || (x0 == x1 && y0 > y1) 
