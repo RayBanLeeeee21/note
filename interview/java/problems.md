@@ -3,7 +3,6 @@
 - 集合
     - HashMap 1.7 & 1.8
     - List(ArrayList)
-- hashCode() & equals()
 - 并发:
     - Thread
     - wait() / notify()
@@ -24,6 +23,7 @@
     - 为什么不可继承
 - 基础:
     - final / finally / finallize()
+    - hashCode() & equals()
 
 ## JVM
 - 内存分区
