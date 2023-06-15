@@ -1,0 +1,242 @@
+html body {
+  font-size: 15px;
+  font-family: 'Consolas', 'Yahei' Times, serif;
+  background-color: #542;
+  line-height: 1.5;
+}
+html body{
+  max-width: 1100px;
+  background-color: #362712;
+}
+html body h1 {
+  color: #fff;
+  font-size: 20px;
+  margin-top: 40px;
+}
+html body h2 {
+  color: #ddd;
+  font-size: 17px;
+  margin-top: 40px;
+}
+html body  h3 {
+  color: #777;
+  font-size: 15px;
+  margin-top: 40px;
+}
+html body  h4 {
+  color: #777;
+  font-size: 15px;
+  margin-top: 30px;
+}
+html body  h5 {
+  color: #777;
+  font-size: 15px;
+  margin-top: 30px;
+}
+html body h6 {
+  color: #777;
+  font-size: 15px;
+  margin-top: 30px;
+}
+html body img {
+  min-width: 300px;
+  max-width: 1100px;
+  margin: 20px 0;
+  width: 80%;
+  opacity: 100;
+  background-color: white;
+}
+html bodyp {
+  color: #ddd;
+  margin: 0;
+  margin-top: 18px;
+}
+html body li > p {
+  color: inherit;
+  margin-top: 0;
+}
+html body ul+ul,
+html body  ol+ul,
+html body  ul+ol,
+html body  ol+ol {
+  margin-top: 5px;
+}
+html body  ul,
+html body  ol {
+  color: #ea6;
+}
+html body  ul ul,
+html body  ul ol,
+html body  ol ul,
+html body  ol ol {
+  color: #bb7;
+}
+html body  ul ul ul,
+html body  ul ul ol,
+html body  ul ol ul,
+html body  ul ol ol,
+html body  ol ul ul,
+html body  ol ul ol,
+html body  ol ol ul,
+html body  ol ol ol {
+  color: #7aa;
+}
+html body  ul ul ul ul,
+html body  ul ul ul ol,
+html body  ul ul ol ul,
+html body  ul ul ol ol,
+html body  ul ol ul ul,
+html body  ul ol ul ol,
+html body  ul ol ol ul,
+html body  ul ol ol ol,
+html body  ol ul ul ul,
+html body  ol ul ul ol,
+html body  ol ul ol ul,
+html body  ol ul ol ol,
+html body  ol ol ul ul,
+html body  ol ol ul ol,
+html body  ol ol ol ul,
+html body  ol ol ol ol {
+  color: #aa8;
+}
+html body  ul ul ul ul ul,
+html body  ul ul ul ul ol,
+html body  ul ul ul ol ul,
+html body  ul ul ul ol ol,
+html body  ul ul ol ul ul,
+html body  ul ul ol ul ol,
+html body  ul ul ol ol ul,
+html body  ul ul ol ol ol,
+html body  ul ol ul ul ul,
+html body  ul ol ul ul ol,
+html body  ul ol ul ol ul,
+html body  ul ol ul ol ol,
+html body  ul ol ol ul ul,
+html body  ul ol ol ul ol,
+html body  ul ol ol ol ul,
+html body  ul ol ol ol ol,
+html body  ol ul ul ul ul,
+html body  ol ul ul ul ol,
+html body  ol ul ul ol ul,
+html body  ol ul ul ol ol,
+html body  ol ul ol ul ul,
+html body  ol ul ol ul ol,
+html body  ol ul ol ol ul,
+html body  ol ul ol ol ol,
+html body  ol ol ul ul ul,
+html body  ol ol ul ul ol,
+html body  ol ol ul ol ul,
+html body  ol ol ul ol ol,
+html body  ol ol ol ul ul,
+html body  ol ol ol ul ol,
+html body  ol ol ol ol ul,
+html body  ol ol ol ol ol {
+  color: #8b6;
+}
+html body  ul ul ul ul ul ul,
+html body  ul ul ul ul ul ol,
+html body  ul ul ul ul ol ul,
+html body  ul ul ul ul ol ol,
+html body  ul ul ul ol ul ul,
+html body  ul ul ul ol ul ol,
+html body  ul ul ul ol ol ul,
+html body  ul ul ul ol ol ol,
+html body  ul ul ol ul ul ul,
+html body  ul ul ol ul ul ol,
+html body  ul ul ol ul ol ul,
+html body  ul ul ol ul ol ol,
+html body  ul ul ol ol ul ul,
+html body  ul ul ol ol ul ol,
+html body  ul ul ol ol ol ul,
+html body  ul ul ol ol ol ol,
+html body  ul ol ul ul ul ul,
+html body  ul ol ul ul ul ol,
+html body  ul ol ul ul ol ul,
+html body  ul ol ul ul ol ol,
+html body  ul ol ul ol ul ul,
+html body  ul ol ul ol ul ol,
+html body  ul ol ul ol ol ul,
+html body  ul ol ul ol ol ol,
+html body  ul ol ol ul ul ul,
+html body  ul ol ol ul ul ol,
+html body  ul ol ol ul ol ul,
+html body  ul ol ol ul ol ol,
+html body  ul ol ol ol ul ul,
+html body  ul ol ol ol ul ol,
+html body  ul ol ol ol ol ul,
+html body  ul ol ol ol ol ol,
+html body  ol ul ul ul ul ul,
+html body  ol ul ul ul ul ol,
+html body  ol ul ul ul ol ul,
+html body  ol ul ul ul ol ol,
+html body  ol ul ul ol ul ul,
+html body  ol ul ul ol ul ol,
+html body  ol ul ul ol ol ul,
+html body  ol ul ul ol ol ol,
+html body  ol ul ol ul ul ul,
+html body  ol ul ol ul ul ol,
+html body  ol ul ol ul ol ul,
+html body  ol ul ol ul ol ol,
+html body  ol ul ol ol ul ul,
+html body  ol ul ol ol ul ol,
+html body  ol ul ol ol ol ul,
+html body  ol ul ol ol ol ol,
+html body  ol ol ul ul ul ul,
+html body  ol ol ul ul ul ol,
+html body  ol ol ul ul ol ul,
+html body  ol ol ul ul ol ol,
+html body  ol ol ul ol ul ul,
+html body  ol ol ul ol ul ol,
+html body  ol ol ul ol ol ul,
+html body  ol ol ul ol ol ol,
+html body  ol ol ol ul ul ul,
+html body  ol ol ol ul ul ol,
+html body  ol ol ol ul ol ul,
+html body  ol ol ol ul ol ol,
+html body  ol ol ol ol ul ul,
+html body  ol ol ol ol ul ol,
+html body  ol ol ol ol ol ul,
+html body  ol ol ol ol ol ol {
+  color: #ea6;
+}
+html body  em {
+  color: #ea0;
+}
+html body  strong {
+  color: #d06040;
+  font-weight: bold;
+}
+html body  code,
+html body  pre[data-role="codeBlock"] {
+  background-color: #aabbdd;
+  max-width: 1100px;
+  filter: invert(1);
+}
+html body  table th {
+  font-weight: bold;
+  color: #ea6;
+}
+html body  table td {
+  color: #bb7;
+}
+html body  p + pre,
+html body  pre + p,
+html body  p + blockquote,
+html body  blockquote + p {
+  margin-top: 20px;
+}
+html body  blockquote {
+  background-color: #542;
+}
+html body pre,
+html body span,
+html body pre span,
+html body span span {
+  font-size: 14px;
+}
+html body code {
+  font-size: 15px !important;
+}
+html body[for="html-export"]:not([data-presentation-mode])  {
+  padding: 2em;
+}
