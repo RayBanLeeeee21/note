@@ -157,10 +157,9 @@ redo log的flush时机
 - 超时刷入: `innodb_flush_log_at_timeout`, 默认: 1s
   - 由 Log Writer Thread 执行
 - 事务提交时刷入: `innodb_flush_log_at_trx_commit`, 默认: 1
-  - 0: 定时刷新
-  - 1: 事务提交时刷新(保证ACID)
-    - **完全ACID保证需要配合
-  - 2: 事务提交后, 定时刷新
+  - 0: 事务commit不触发 write, 由IO线程定时 write + flush
+  - 1: 事务commit触发 write + flush(保证完全Durability)
+  - 2: 事务commit触发 write, 由IO线程定时flush
 
 参考:
 
