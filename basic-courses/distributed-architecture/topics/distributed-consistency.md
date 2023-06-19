@@ -1,3 +1,9 @@
+开源项目:
+- etcd
+  - git: https://github.com/etcd-io/etcd
+- zookeepker:
+  - git: https://github.com/apache/zookeeper
+
 ## Paxos
 
 - Paxos
