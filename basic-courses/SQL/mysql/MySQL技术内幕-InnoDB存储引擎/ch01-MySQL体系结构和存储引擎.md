@@ -28,10 +28,10 @@ MySQL Server的组成部分:
 - 连接池组件(Connection Pool): 
   > 认证, 线程与连接管理, 内存检查, cache
 - 核心:
-  > SQL接口(DML, DDL, 存储过程, 视图)
-  > 解析器
-  > 优化器
-  > cache, buffer
+  - SQL接口(DML, DDL, 存储过程, 视图)
+  - 解析器
+  - 优化器
+  - cache, buffer
 - 存储引擎: **插件式**
 - 管理服务和工具组件: 
   > 备份, 恢复, 安全, 复制, 管理(Administration), 配置, 迁移, 元数据
