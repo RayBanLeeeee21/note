@@ -84,7 +84,9 @@
 
 ThreadLocalMap
 - 特点:
-    - hash冲突解决方法: **线性探测再散列**: 发生哈希冲突时向后找
+    - hash冲突解决方法: **线性探测再散列**: 
+        - 每个ThreadLocal创建时带一个hash值
+        - 发生哈希冲突时向后找
         - Q: 为什么不用链地址法? A: 回收时, 遍历数组与遍历链表数组中的结点相比, 能更好地利用局部性原理
     - 负载因子: 2/3
     - 初始容量: 16
@@ -105,17 +107,24 @@ ThreadLocalMap的结点
     ``` 
 
 
-#### 清理过期slot
+#### 清理
 
-`expungeStaleEntry()`执行一个类似**标记-整理**的过程
-- 从坐标`staleSlot`开始, 整理连续一片slot, 空的被清理掉, 非空的整理到靠前的位置
-- 直到遇到第一个空slot才停下
+##### 快速清理 - 清理一片连续区域
+`expungeStaleEntry()`执行一个类似标记-整理的过程
+- 实现
+  - 从坐标staleSlot开始, 向右清理一片连续的slot(遇到空slot时停下)
+  - 过期的Entry被清理掉
+  - 未过期的尝试放在更靠近 hash % (len - 1) 的位置, 便于查询
+- 目的:
+  - 只清理局部区域是为了防止过度占用用户线程的CPU
+  - 移动未过期的entry是为了加速查询
 -   ```java
     /**
-        Compact: 从一个过期slot开始, 向后清理一片过期slot, 并把未过期的整理放到靠前的位置
-            遇到第一个空slot时停止
-        @return 整理完成后, 从staleSlot往右数起第一个空slot的位置
-    */
+     * Compact: 从一个过期slot开始, 向后清理一片过期slot, 并把未过期的整理放到靠前的位置
+     * 遇到第一个空slot时停止
+     *
+     * @return 整理完成后, 从staleSlot往右数起第一个空slot的位置
+     */
     private int expungeStaleEntry(int staleSlot) {
         Entry[] tab = table;
         int len = tab.length;
@@ -125,24 +134,26 @@ ThreadLocalMap的结点
         tab[staleSlot] = null;
         size--;
 
-        // 一直处理到遇到下个空slot
-        Entry e; int i;
+        // 向右循环搜索, 直到遇到下个空slot为止, 或者是把所有都清理完了
+        Entry e;
+        int i;
         for (i = nextIndex(staleSlot, len); (e = tab[i]) != null; i = nextIndex(i, len)) {
             ThreadLocal<?> k = e.get();
 
-            // key被回收, 直接将slot清空
+            // entry过期, 直接将slot清空
             if (k == null) {
                 e.value = null;
                 tab[i] = null;
                 size--;
-            } else {
 
-                // key未回收, 则判断hash是否冲突, 如发生过冲突(推后保存)则重新为Entry找一个更靠前的位置
+                // entry未过期. 判断一个entry所在位置是否为 hash % (len-1)
+                // 如果不是则尝试找一个更靠近 hash % (len - 1)的位置
+            } else {
                 int h = k.threadLocalHashCode & (len - 1);
-                if (h != i) {
+                if (h != i) {  // h在i左边
                     tab[i] = null;
 
-                    // 重新找位置
+                    // 重新为其找个更靠左(靠近 hash % (len - 1)) 的位置
                     while (tab[h] != null) h = nextIndex(h, len);
                     tab[h] = e;
                 }
@@ -152,27 +163,56 @@ ThreadLocalMap的结点
     }
     ```
 
+##### 动态清理多片连续区域
 `cleanSomeSlots()`方法连续执行若干次`expungeStaleEntry()`
-- 执行次数为 `log_2 (size)`, 即是说size越大, 循环次数越多
-- 如果table很大, 但是很稀疏, 那循环的过程会频繁遇到null, 从而快速结束循环
+- 实现:
+  - 从i开始向右查找, 如果找了log_2 (n)个都没找到可以清理的, 就结束清理过程
+  - 如果有找到可以清理的则重置n = length, 清理多点
+- 目的:
+  - 动态预测可回收的区域数量
+  - 如果能回收的较少, 就快速结束, 防止长时间占用用户线程做清理工作
+  - 如果能回收的较多, 就多回收一点, 使回收过程有所收益
 -   ```java
-    /** 返回false表示一个都没清理到 */
+    /**
+     * 返回false表示一个都没清理到
+     */
     private boolean cleanSomeSlots(int i, int n) {
         boolean removed = false;
         Entry[] tab = table;
         int len = tab.length;
         do {
+            // 向右循环查找
             i = nextIndex(i, len);
             Entry e = tab[i];
+
+            // 一旦找到一个可以回收的就回收一片
             if (e != null && e.get() == null) {
                 n = len;
                 removed = true;
                 i = expungeStaleEntry(i);
             }
-        } while ( (n >>>= 1) != 0);
+
+            // 如果找了log_2 (n)个都没找到可以清理的, 就结束清理过程
+        } while ((n >>>= 1) != 0);
         return removed;
     }
     ```
+
+##### 清理所有连续区域
+```java
+/**
+    清理所有过期slot 
+ */
+private void expungeStaleEntries() {
+    Entry[] tab = table;
+    int len = tab.length;
+    for (int j = 0; j < len; j++) {
+        Entry e = tab[j];
+        if (e != null && e.get() == null)
+            expungeStaleEntry(j);
+    }
+}
+```
 
 #### key.threadLocalHashCode计算
 
@@ -195,25 +235,27 @@ set():
 - set()的过程中遇到过期slot会清理掉过期slot并占用原来过期slot的位置
 - set()完以后也会顺便做一下清理
 - set()的时候顺便清理, 是防止GC造成一大片过期slot在那里占用位置, 影响查询效率
+- replaceStaleEntry()过程中, 如果key存在, 假设其位置为idx, 
+  一定不能把 [hash % (len - 1), idx) 这段位置清理掉, 否则会出现重复key的问题
 -   ```java
-    private void set(ThreadLocal<?> key, Object value) {
+        private void set(ThreadLocal<?> key, Object value) {
 
         Entry[] tab = table;
         int len = tab.length;
-        int i = key.threadLocalHashCode & (len-1); // 定位slot
+        int i = key.threadLocalHashCode & (len - 1); // 初始计算hash
 
-        for (Entry e = tab[i];
-                e != null;
-                e = tab[i = nextIndex(i, len)]) { // 发生冲突时向后走
+        // 发生冲突时向后走
+        for (Entry e = tab[i]; e != null; e = tab[i = nextIndex(i, len)]) {
             ThreadLocal<?> k = e.get();
 
-            // 匹配到key时, 设置后返回
+            // 没有被gc回收掉
             if (k == key) {
                 e.value = value;
                 return;
             }
 
-            // 当前slot的Entry.key被回收了, 则去往后找到key所在的Entry, 换到这里来
+            // slot被回收了, 需要向右找到相同key的slot并替换, 或者是找到一个空slot并设置
+            // - 期间会顺便清理
             if (k == null) {
                 replaceStaleEntry(key, value, i);
                 return;
@@ -229,20 +271,19 @@ set():
     }
 
     private void replaceStaleEntry(ThreadLocal<?> key, Object value,
-                                       int staleSlot) {
+                                   int staleSlot) {
         Entry[] tab = table;
         int len = tab.length;
         Entry e;
-        
-        // slotToExpunge是后面清理过程的起点
-        int slotToExpunge = staleSlot;
 
-        // 先向前找最靠前的key被回收掉的entry位置, 作为slotToExpunge, 直到被空的slot挡住
+        // 先向左搜索一个清理起点 slotToExpunge 
+        // - 风险: 必须有可回收的key, 不然这里会死循环
+        int slotToExpunge = staleSlot;
         for (int i = prevIndex(staleSlot, len); (e = tab[i]) != null; i = prevIndex(i, len))
             if (e.get() == null) slotToExpunge = i;
 
-    
-        // 从staleSlot向后匹配key, 直到遇到空slot
+
+        // 从staleSlot向右搜索一个空slot, 或者是key相等的slot
         for (int i = nextIndex(staleSlot, len); (e = tab[i]) != null; i = nextIndex(i, len)) {
             ThreadLocal<?> k = e.get();
 
@@ -252,24 +293,26 @@ set():
                 // 设置新值
                 e.value = value;
 
-                // 将Entry与过期的Entry交换
-                    // 交换过程一直不会把Entry放到 hash & (len - 1)之前的位置
+                // 第一个过期的结点交换到位置i, 后面64行会被批量清理掉
                 tab[i] = tab[staleSlot];
-                tab[staleSlot] = e;
+                tab[staleSlot] = e;  // 放到靠近 hash & (len - 1)的位置
+
+                // slotToExpunge == staleSlot 表示 staleSlot左边没有可回收的
+                // - 此时要从staleSlot右边找一个最接近的清理起点
+                if (slotToExpunge == staleSlot) slotToExpunge = i;
 
                 // 退出之前顺便做一下清理
-                if (slotToExpunge == staleSlot) slotToExpunge = i;
                 cleanSomeSlots(expungeStaleEntry(slotToExpunge), len);
                 return;
             }
 
-            // 重新选择清理的起点
+            // slotToExpunge == staleSlot 表示 staleSlot左边没有可回收的
+            // - 此时要从staleSlot右边找一个最接近的清理起点
             if (k == null && slotToExpunge == staleSlot)
                 slotToExpunge = i;
         }
 
-
-        // 匹配不到key(之前没set或者被回收), 就创建新Entry放到过期slot的位置
+        // 上文向右搜索的过程没搜到key, 遇到了空slot, 则创建新Entry放到过期slot的位置
         tab[staleSlot].value = null;
         tab[staleSlot] = new Entry(key, value);
 
@@ -278,62 +321,6 @@ set():
     }
     ```
 
-#### 扩容
-
-扩容过程比较简单, 建个新的双倍容量的表替换上去
--   ```java
-    private void rehash() {
-
-        // 清理所有过期slot
-        expungeStaleEntries();
-
-        // 可能会清理掉一些, 因此清理完以 0.75 * threshold 为阈值
-        if (size >= threshold - threshold / 4) resize();
-    }
-
-    /**
-        清理所有过期slot 
-     */
-    private void expungeStaleEntries() {
-        Entry[] tab = table;
-        int len = tab.length;
-        for (int j = 0; j < len; j++) {
-            Entry e = tab[j];
-            if (e != null && e.get() == null)
-                expungeStaleEntry(j);
-        }
-    }
-
-    /**
-        建一个双倍容量的新表, 按线性探测再散列法重新计算在新容量下Entry的位置, 放到新表上, 最后替换新表
-    */
-    private void resize() {
-        Entry[] oldTab = table;
-        int oldLen = oldTab.length;
-        int newLen = oldLen * 2;
-        Entry[] newTab = new Entry[newLen];
-        int count = 0;
-
-        for (int j = 0; j < oldLen; ++j) {
-            Entry e = oldTab[j];
-            if (e != null) {
-                ThreadLocal<?> k = e.get();
-                if (k == null) {
-                    e.value = null; // Help the GC
-                } else {
-                    int h = k.threadLocalHashCode & (newLen - 1);
-                    while (newTab[h] != null) h = nextIndex(h, newLen);
-                    newTab[h] = e;
-                    count++;
-                }
-            }
-        }
-
-        setThreshold(newLen);
-        size = count;
-        table = newTab;
-    }
-    ```
 
 #### getEntry()
 
@@ -366,6 +353,54 @@ set():
         }
         return null;
     }
+
 ```
 
 
+#### 扩容
+
+扩容过程比较简单, 建个新的双倍容量的表替换上去
+-   ```java
+    private void rehash() {
+
+        // 清理每一片连续区域
+        expungeStaleEntries();
+
+        // 可能会清理掉一些, 因此清理完以 0.75 * threshold 为阈值
+        if (size >= threshold - threshold / 4) resize();
+    }
+
+    /**
+        建一个双倍容量的新表, 按线性探测再散列法重新计算新位置, 放到新表上, 最后替换新表
+    */
+    private void resize() {
+        Entry[] oldTab = table;
+        int oldLen = oldTab.length;
+        int newLen = oldLen * 2;
+        Entry[] newTab = new Entry[newLen];
+        int count = 0;
+
+        for (int j = 0; j < oldLen; ++j) {
+            Entry e = oldTab[j];
+            if (e != null) {
+                ThreadLocal<?> k = e.get();
+                if (k == null) {
+                    e.value = null; // Help the GC
+                } else {
+                    int h = k.threadLocalHashCode & (newLen - 1);
+                    while (newTab[h] != null) h = nextIndex(h, newLen);
+                    newTab[h] = e;
+                    count++;
+                }
+            }
+        }
+
+        setThreshold(newLen);
+        size = count;
+        table = newTab;
+    }
+    
+    private void setThreshold(int len) {
+        threshold = len * 2 / 3;
+    }
+    ```

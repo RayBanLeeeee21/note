@@ -18,6 +18,8 @@
     - `Locksupport.parkUntil()`
 - `TERMINATED`: 运行结束
 
+![thread-status](./resources/thread-status.png)
+
 
 ## 常见问题
 - 线程状态
