@@ -1,18 +1,22 @@
-参考:
-参考
-- [HashMap多线程死循环问题](https://blog.csdn.net/xuefeng0707/article/details/40797085)
+
 
 HashMap17与18差别
-* 17将新结点加在链表头, 18加在链表尾
+* 17加入新结点使用头插法, 18使用尾插法
 * 17先检查扩容再加入新结点, 18先加入新结点再扩容
 
 HashMap
 * 特点:
     * key/value都可以是null
-* 默认值:
-    * loadFactor: 0.75
-    * initCapacity: 16
-    * threshold: 0.75*16 = 12
+* 常量
+    - 容量
+        * DEFAULT_INITIAL_CAPACITY: 16
+        * MAXIMUM_CAPACITY: 1 << 30
+    - 扩容
+        * DEFAULT_LOAD_FACTOR: 0.75
+    - 树化阈值
+        * MIN_TREEIFY_CAPACITY: 64
+        * TREEIFY_THRESHOLD: 8
+        * UNTREEIFY_THRESHOLD: 6
 * hash算法
     * (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
     * 将高位传播到低位
@@ -520,4 +524,82 @@ HashMap
         }
         return hd;
     }
+    ```
+
+## 问题 
+
+### 为什么1.7 HashMap 并发可能死循环
+
+参考:
+- [HashMap多线程死循环问题](https://blog.csdn.net/xuefeng0707/article/details/40797085)
+
+1.7的 HashMap 使用头插法插入
+- 假设rehash时, 有个bucket的结点全部都没有改位置, 则这个bucket在rehash后会被倒转, 
+    - 如 [1]->2->3->4 变成 [4]->3->2->1
+    ```java
+    void transfer(Entry[] newTable, boolean rehash) {
+        int newCapacity = newTable.length;
+        for (Entry<K,V> e : table) {
+            while(null != e) {
+                Entry<K,V> next = e.next;
+                if (rehash) {
+                    e.hash = null == e.key ? 0 : hash(e.key);
+                }
+                int i = indexFor(e.hash, newCapacity);
+                e.next = newTable[i];
+                newTable[i] = e;
+                e = next;
+            }
+        }
+    }
+    ```
+- 假设有两个线程同时`resize()`
+- 线程1刚标记好第一组e & next:
+    ```
+    // 旧表
+    [1]->2->3->4->null
+     e   n
+    ```
+- 线程2执行完rehash, 线程1中 next 与 e 在链表的顺序被倒转
+    ```
+    // 线程2的新表
+    [ ]
+    [4]->3->2->1->null
+            n  e      // 线程1的指针   
+    ```
+- 线程1继续操作, 会依次把 e, next 放入新buckets
+    ```
+    // 线程2的新表
+    [ ]
+    [4]->3->2->1->null
+            n  e      // 线程1的指针   
+
+    // 线程1的新表
+    [ ]
+    [1]->null
+     e                // 线程1的指针   
+    ```
+- 线程1向前推动e(e=next, next=e.next), 将e=2插入新表
+    ```
+    // 线程2的新表
+    [ ]
+    [4]->3->2->1->null
+            e  n    // 线程1的指针   
+
+    // 线程1的新表
+    [ ]
+    [2]->1->null
+     e   n          // 线程1的指针   
+    ```
+- 线程1向前推动e(e=next, next=e.next). 这一步e又重复指向了1, 导致生成环
+    ```
+    // 线程2的新表
+    [ ]
+    [4]->3->2->1->null
+               e   n // 线程1的指针   
+
+    // 线程1的新表
+     [ ]     
+    e[1]->2->null
+      |___|   
     ```
