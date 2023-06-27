@@ -3,7 +3,8 @@
 
 
 ## 推荐
-- DB
+- 存储相关
+  - [《数据密集型系统应用设计》读书笔记](https://zfzz8q2eb8.feishu.cn/docx/doxcnDlqcw2MEjz6f7Ltv7eaH3d) 
   - MySQL: 
     - [innodb系列(持续更新中)](https://zfzz8q2eb8.feishu.cn/drive/folder/Nex8fEvWNlqDYwdS4TNcjO57nnd)
 - java
