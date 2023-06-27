@@ -3,6 +3,9 @@
 
 
 ## 推荐
+- DB
+  - MySQL: 
+    - [innodb系列](https://zfzz8q2eb8.feishu.cn/drive/folder/Nex8fEvWNlqDYwdS4TNcjO57nnd)
 - java
     - JUC系列
         - [LongAdder底层实现 - Striped64](./basic-courses/lang/java/jdk1.8/java.util.concurrent/atomic/Striped64.md)
@@ -10,8 +13,8 @@
         - [**ConcurrentHashMap-1.8**](./basic-courses/lang/java/jdk1.8/java.util.concurrent/ConcurrentHashMap18.md)
         - [AQS](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/AbstractQueuedSynchronizer-v2.0.md)
         - [ReentrantLock](./basic-courses/lang/java/jdk1.8/java.util.concurrent/locks/ReentrantLock.md)
-        - [ThreadLocal](./basic-courses/lang/java/jdk1.8/javja.lang/ThreadLocal.md)
-        - [InheritableThreadLocal](./basic-courses/lang/java/jdk1.8/javja.lang/InheritableThreadLocal.md)
+        - [ThreadLocal](./basic-courses/lang/java/jdk1.8/java.lang/ThreadLocal.md)
+        - [InheritableThreadLocal](./basic-courses/lang/java/jdk1.8/java.lang/InheritableThreadLocal.md)
     - NIO
         - [Channel](./basic-courses/lang/java/jdk1.8/java.util.nio/Channel.md)
 - Spring
