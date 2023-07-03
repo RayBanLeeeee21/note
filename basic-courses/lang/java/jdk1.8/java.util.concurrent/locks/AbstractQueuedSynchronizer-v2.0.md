@@ -286,7 +286,7 @@ unparkSuccessor() - 唤醒后续结点: 该方法在以下三种情况下被调�
          * to clear in anticipation of signalling.  It is OK if this
          * fails or if status is changed by waiting thread.
          */
-        // ??? 不懂为什么没有必要改还去改
+        // 当前结点改回初始状态
         int ws = node.waitStatus;
         if (ws < 0) compareAndSetWaitStatus(node, ws, 0);
 
@@ -299,7 +299,7 @@ unparkSuccessor() - 唤醒后续结点: 该方法在以下三种情况下被调�
                 if (t.waitStatus <= 0)
                     s = t;
         }
-        if (s != null) LockSupport.unpark(s.thread);
+        if (s != null) LockSupport.unpark(s.thread); // 唤醒后续第一个沉睡的结点
     }
 ```
 

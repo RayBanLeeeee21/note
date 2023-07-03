@@ -87,8 +87,8 @@ AQS
                     interrupted = true;                         // 
             }
         } finally {
-            // 在acquire()中, 线程发生异常时, 只置位中断符号
-            // 所以正常情况下, acquire()不会引发cancel
+            // 根据81和82行可看出来, 正常返回都不会走这里, 中断也不会
+            // 除非出现一些非预期的RuntimeException
             if (failed)                            
                 cancelAcquire(node);
         }
@@ -108,6 +108,8 @@ AQS
         node.thread = null;
 
         // 删除node之前的cancelled结点
+        //  - 因为只有清理完node之前的结点才会改node状态为Cancelled, 
+        //    所以不会跟shouldParkAfterFailedAcquire()并发冲突
         Node pred = node.prev;
         while (pred.waitStatus > 0)
             node.prev = pred = pred.prev;

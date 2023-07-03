@@ -117,7 +117,7 @@ private final Node<K,V>[] initTable() {
         else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
             try {
 
-                // 1.2.1 双检查, 防止表发生了变化, 确认没有再建表
+                // 1.2.1 双检查, 防止表发生了变化(ABA), 确认没有再建表
                 if ((tab = table) == null || tab.length == 0) {
                     int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
                     @SuppressWarnings("unchecked")

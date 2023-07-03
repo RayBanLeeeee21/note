@@ -41,6 +41,7 @@ static class DefaultThreadFactory implements ThreadFactory {
 Worker的特点
 - 携带一个task
 - 其本身是个锁(不可重入锁)
+- 其本身关联一个线程
 
 ThreadPoolExecutor.Worker
 ```java

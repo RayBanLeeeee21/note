@@ -28,7 +28,23 @@ ConcurrentHashMap
         ```java
         static final int RETRIES_BEFORE_LOCK = 2;           // contains()/size()方法中上锁之前重试的次数
         ```
-
+- 并发实现:
+    - segment数组更新: 循环CAS
+    - put: 
+        1. 先tryLock(), 如果tryLock()成功, 则直接向下搜结点, 或者插入新结点
+        2. 如果上一步失败, 则找到bucket头结点, 自旋64次尝试tryLock()
+            - 每次重试失败都要重新检查头结点是否有变化, 有变化就重新循环
+            - 每次try都把指针e向下推一格. 如果提前tryLock()成功, 则从当前结点继续往下找
+            - 如果找到key, 或者确定key不存在, 就继续循环直到tryLock()成功
+            - 如果tryLock()次数过多, 则直接lock()
+        3. 上一步如果只是update, 就直接返回
+        4. 插入新结点, 然后检查要不要`resize()` (这里已经拿到锁)
+        5. 释放锁
+    - remove
+        1. 先tryLock()
+        2. 上一步不成功, 则循环尝试tryLock(), 最多64轮
+        3. 删除结点
+        4. 释放锁
 
 初始化
 1. `ssize`: segment的个数
