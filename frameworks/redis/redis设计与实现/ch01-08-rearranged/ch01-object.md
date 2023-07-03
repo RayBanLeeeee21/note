@@ -1,5 +1,7 @@
 # Chapter 01 对象
 
+redis 在设计数据结构时, 尽可能做到节省空间, 因此很多地方会用到变长编码
+
 ## 1. 数据结构
 - `redisObject`
     ```cpp
@@ -59,10 +61,10 @@ redis对象:
 ## 3. 类型检查与多态
 
 类型检查: 检查`redisObject->type`是否匹配
-![类型检查](./resources/ch08-robj-type-check.png)
+![类型检查](../resources/ch08-robj-type-check.png)
 
 多态命令实现: 根据`redisObject->type`确定类型, 然后根据`redisObject->encoding`确定编码, 然后进行类型转换, 进行具体操作
-![多态](./resources/ch08-robj-polymorphic.png)
+![多态](../resources/ch08-robj-polymorphic.png)
 
 
 ## 4. 内存回收
