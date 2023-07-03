@@ -337,7 +337,7 @@ Insert Buffer Bitmap: 特殊页, 用来记录表空中所有Insert Buffer Bitmap
 
 ## 2.6.2 两次写
 
-douwrite buffer: 位于**共享表空间**, 所有表共享
+doublewrite buffer: 位于**共享表空间**, 所有表共享
 
 doublewrite: 将脏页刷新到磁盘时, 为防止宕机
 

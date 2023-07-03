@@ -1,5 +1,9 @@
 # Redo Log
 
+相关章节:
+- [checkpoint](../ch02-InnoDB存储引擎.md#24-checkpoint技术)
+- [redo log文件结构](../ch03-文件.md#362-重做日志文件redo-log)
+- 
 
 ## 基本概念
 
@@ -13,46 +17,55 @@ Redo Log: 记录对page的更新操作
 - `innodb_mirrored_log_groups`: 组数
 - `innodb_log_files_in_groups`: 组内redo log文件数
 - `innodb_log_file_size`
-    - 太小会导致频繁`Async/Sync Flush Checkpoint`
-    - 太大导致宕机恢复慢
-
+  - 太小会导致频繁`Async/Sync Flush Checkpoint`
+  - 太大导致宕机恢复慢
 
 ## Redo Log持久化
 
 刷磁盘(记录Checkpoint)时机:
+
 - Sharp Checkpoint: 同步所有脏页. 关闭时使用
-    - `innodb_fast_shutdown=1`时生效
+  - `innodb_fast_shutdown=1`时生效
 - Fuzzy Checkpoint: 同步部分脏页. 运行时使用
-    - Master Thread Checkpoint
-    - FLUSH_LRU_LIST Checkpoint: LRU空闲页不够, 移除脏页时
-    - Dirty Page too much Checkpoint: 脏页太多
-    - Async/Sync Flush Checkpoint: redo log文件不够用
+  - Master Thread Checkpoint
+  - FLUSH_LRU_LIST Checkpoint: LRU空闲页不够, 移除脏页时
+  - Dirty Page too much Checkpoint: 脏页太多
+  - Async/Sync Flush Checkpoint: redo log文件不够用
 - commit
-    - `innodb_flush_log_at_tx_commit`:
-        - 0: 提交时不flush, 由Master Thread同步
-        - 1: 提交时flush并fsync (**真正保证持久性**)
-        - 2: 提交时flush, 不fsync, 由操作系统决定
+  - `innodb_flush_log_at_tx_commit`:
+    - 0: 提交时不flush, 由Master Thread同步
+    - 1: 提交时flush并fsync (**真正保证持久性**)
+    - 2: 提交时flush, 不fsync, 由操作系统决定
 
 Async/Sync Flush Checkpoint: 在Checkpoint落后Redo Log太多时触发
-- Async Flush: 触发时机 `redo_lsn - checkpoint_lsn > 75% total_redo_log_size`
-    - 阻塞发现问题的用户线程
-- Sync Flush: 触发时机 `redo_lsn - checkpoint_lsn > 90% total_redo_log_size`
-    - 阻塞所有用户线程
 
+- Async Flush: 触发时机 `redo_lsn - checkpoint_lsn > 75% total_redo_log_size`
+  - 阻塞发现问题的用户线程
+- Sync Flush: 触发时机 `redo_lsn - checkpoint_lsn > 90% total_redo_log_size`
+  - 阻塞所有用户线程
 
 ## Redo Log原理
 
 Redo Log与事务关系
+
 - Redo Log在事务执行过程中不间断被写入, 如果多个事务并发, 则可能穿插记录到redo log
     ```
-    T1, T2, T1, *T2, T3, T1, *T3, *T1
+    T1 update 1 
+    T2 update 1
+    T1 update 2
+    T2 commit
+    T3 update 1
+    T1 update 3
+    T3 commit
+    T1 commit
     ```
 
 #### Redo Log block
 
 Redo Log block: redo log写磁盘时的基本单位
+
 - 大小: 512 byte
-    - 与扇区大小相同, 因此写到磁盘上是原子的, 不用double write, 但还是有个tailer用来校验
+  - 与扇区大小相同, 因此写到磁盘上是原子的, 不用double write, 但还是有个tailer用来校验
 - 结构:
     ```yml
     log block header:
@@ -64,14 +77,17 @@ Redo Log block: redo log写磁盘时的基本单位
     data: []
     log block tailer:        4 byte      # 值为header no, 用于校验信息是否完整
     ```
+
 <br/>
 
 前4个block
+
 - redo log file header: 记录一些元信息
 - checkpoint1:
 - 空
-- checkpoint2: 
+- checkpoint2:
 
-双checkpoint的作用: 
+双checkpoint的作用:
+
 - 交替使用来记录最新的check point LSN
 - 分别占一个block是为了保证不会同步丢失
