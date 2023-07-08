@@ -434,6 +434,9 @@ put()
 计数器部分原理与[LongAdder](./atomic/LongAdder.md)几乎一致. `fullAddCount()`部分的解读可以直接跳过, 直接参考LongAdder.
 
 结点计数与扩容实现: 
+- 注意: jdk1.8中ConcurrentHashMap中该方法有bug, 这个bug在jdk-12中被修复 
+  具体参考: https://github.com/openjdk/jdk/commit/8846159987f902bb6e2b966eb4656da4b6d9469d
+  这里用jdk-12版本来讲解
 ```java
         /**
      * Adds to count, and if table is too small and not already
@@ -488,12 +491,12 @@ put()
                 // rs = Integer.numberOfLeadingZeros(n) | (1 << (RESIZE_STAMP_BITS - 1))
                     // RESIZE_STAMP_BITS = 16
                     // 假设tab.length 前面 有10个零, 则resizeStamp计算结果为 0x0000800A
-                    // resizeStamp对应迁移时sizeCtrl的高16位
-                int rs = resizeStamp(n);                                            
+                    // resizeStamp对应迁移时sizeCtrl的高16位, 即本次迁移预期的epoch
+                int rs = resizeStamp(n) << RESIZE_STAMP_SHIFT;      // jdk8中这行有误 
                 if (sc < 0) {
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 未进行迁移或者正在进行其它轮的迁移
-                        || sc == rs + 1                      
-                        || sc == rs + MAX_RESIZERS 
+                    if (sc != rs                            // 两边不等表示epoch对不上, 或者迁移结束
+                        || sc == rs + 1                     // 迁移结束
+                        || sc == rs + MAX_RESIZERS          // 参与线程过多
                         || (nt = nextTable) == null         // nextTable被撤, 迁移已完成
                         || transferIndex <= 0)              // 所有stripe已被处理完
                         break;
@@ -506,8 +509,7 @@ put()
                 //     高2-16位用来表示迁移的轮次 
                 //     低16位用来记录参与迁移的线程数
                 //     争夺成功则sizeCtl改成0x800A0000
-                else if (U.compareAndSwapInt(this, SIZECTL, sc,
-                                             (rs << RESIZE_STAMP_SHIFT) + 2))
+                else if (U.compareAndSwapInt(this, SIZECTL, sc, rs + 2))
                     transfer(tab, null);
                 s = sumCount();
             }
@@ -653,14 +655,14 @@ put()
             && (f instanceof ForwardingNode) 
             && (nextTab = ((ForwardingNode<K,V>)f).nextTable) != null) {
 
-            int rs = resizeStamp(tab.length);
+            // int rs = resizeStamp(tab.length);  // jdk-8此处有误
+            int rs = resizeStamp(tab.length) << RESIZE_STAMP_SHIFT; 
 
             while (nextTab == nextTable && table == tab &&
                    (sc = sizeCtl) < 0) {
                 // 如果没有迁移结束就要参与迁移
-                if ((sc >>> RESIZE_STAMP_SHIFT) != rs   // 迁移结束
-                    || sc == rs + 1                     // ???
-                    || sc == rs + MAX_RESIZERS          // ???
+                if (sc == rs + 1                        // 迁移结束
+                    || sc == rs + MAX_RESIZERS          // 迁移线程过多
                     || transferIndex <= 0)              // stripe已被分配完
                     break;
                 // 尝试参与迁移
